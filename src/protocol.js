@@ -12,6 +12,8 @@ export const clientMessage = z.discriminatedUnion('type', [
     sessionId,
     text: z.string().trim().min(1).max(2000),
     requestId: z.string().max(64).optional(),
+    /** La app sabe reproducir audio del servidor en este formato. */
+    audio: z.literal('mp3').optional(),
   }),
   z.object({
     type: z.literal('confirm'),

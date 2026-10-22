@@ -21,6 +21,14 @@ const schema = z
     GITHUB_TOKEN: z.string().optional(),
     GITHUB_WORKFLOW_FILE: z.string().default('praxon-agent.yml'),
 
+    VOICE_PROVIDER: z.enum(['none', 'elevenlabs']).default('none'),
+    ELEVENLABS_API_KEY: z.string().optional(),
+    ELEVENLABS_VOICE_ID: z.string().optional(),
+    ELEVENLABS_MODEL: z.string().default('eleven_flash_v2_5'),
+    ELEVENLABS_OUTPUT_FORMAT: z.string().regex(/^mp3_/, 'la app solo reproduce mp3 (mp3_*)').default('mp3_44100_128'),
+    ELEVENLABS_BASE_URL: z.string().url().default('https://api.elevenlabs.io'),
+    ELEVENLABS_LANGUAGE: z.string().default('es'),
+
     CONFIRM_TTL_MS: z.coerce.number().int().positive().default(60_000),
     MAX_TOOL_ITERATIONS: z.coerce.number().int().positive().default(6),
     MAX_HISTORY_MESSAGES: z.coerce.number().int().min(4).default(40),
@@ -32,6 +40,10 @@ const schema = z
     if (c.MYRAYPA_MODE === 'http') {
       need(c.MYRAYPA_API_URL, 'MYRAYPA_API_URL', 'obligatoria con MYRAYPA_MODE=http');
       need(c.MYRAYPA_API_TOKEN, 'MYRAYPA_API_TOKEN', 'obligatoria con MYRAYPA_MODE=http');
+    }
+    if (c.VOICE_PROVIDER === 'elevenlabs') {
+      need(c.ELEVENLABS_API_KEY, 'ELEVENLABS_API_KEY', 'obligatoria con VOICE_PROVIDER=elevenlabs');
+      need(c.ELEVENLABS_VOICE_ID, 'ELEVENLABS_VOICE_ID', 'obligatoria con VOICE_PROVIDER=elevenlabs');
     }
     if (c.GITHUB_MODE === 'http') need(c.GITHUB_TOKEN, 'GITHUB_TOKEN', 'obligatoria con GITHUB_MODE=http');
   });

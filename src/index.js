@@ -14,7 +14,8 @@ const { server, registry } = createApp(config);
 const port = await server.listen();
 
 console.log(`${config.ASSISTANT_NAME}: servidor escuchando en el puerto ${port}`);
-console.log(`Modelo: ${config.MODEL_PROVIDER} | MyRAYPA: ${config.MYRAYPA_MODE} | GitHub: ${config.GITHUB_MODE}`);
+console.log(`Modelo: ${config.MODEL_PROVIDER} | MyRAYPA: ${config.MYRAYPA_MODE} | GitHub: ${config.GITHUB_MODE} | Voz: ${config.VOICE_PROVIDER}`);
+if (config.VOICE_PROVIDER === 'elevenlabs') console.log('Aviso: el texto de las respuestas se envía a ElevenLabs para sintetizar la voz.');
 console.log(`Herramientas registradas: ${registry.list().length}`);
 console.log('Direcciones para la app:');
 for (const list of Object.values(networkInterfaces())) {

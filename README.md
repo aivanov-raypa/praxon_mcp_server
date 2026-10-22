@@ -28,6 +28,7 @@ src/
   connectors/myraypa/     cliente HTTP, version simulada y herramientas (consulta, gestion, agentes)
   integrations/github.js  disparo del workflow de agentes
   model/                  anthropic.js (real) y scripted.js (pruebas, sin API)
+  voice/elevenlabs.js     voz de las respuestas con ElevenLabs (opcional)
   audit/log.js            log JSONL
 docs/                     protocol.md (app<->servidor), myraypa-api.md (API que debe ofrecer MyRAYPA)
 mock/                     servidor de protocolo minimo
@@ -64,6 +65,22 @@ Para configurarlo de verdad, copia `.env.example` a `.env`:
 
 Con el modelo guionizado puedes probar: "¿qué hay abierto en calibraciones?" y "pasa el de los faltantes a urgente"
 (pide confirmación; di "confirmo" o "cancela").
+
+## Voz de las respuestas (ElevenLabs, opcional)
+
+Con `VOICE_PROVIDER=elevenlabs` (más `ELEVENLABS_API_KEY` y `ELEVENLABS_VOICE_ID`) cada frase de la respuesta se sintetiza con
+ElevenLabs y llega a la app como audio mp3; la app la reproduce en orden. Por defecto usa el modelo `eleven_flash_v2_5`
+(baja latencia, admite español). El reconocimiento de lo que dices sigue en el móvil.
+
+- **Respaldo:** si ElevenLabs falla o tarda, esa frase llega como texto y la app la lee con la voz de Android. Tras 3 fallos
+  seguidos deja de intentarlo durante un minuto.
+- **Ahorro:** las frases se sintetizan en paralelo (máx. 2 a la vez, por el límite de peticiones simultáneas de las cuentas), y si
+  interrumpes la respuesta se cancelan las que quedaban por sintetizar.
+- **Privacidad:** el texto de cada respuesta (títulos de tickets, nombres...) sale hacia ElevenLabs. El endpoint de residencia en la
+  UE (`ELEVENLABS_BASE_URL=https://api.eu.residency.elevenlabs.io`) es solo para clientes Enterprise, con otra cuenta y otra clave, y
+  su documentación indica que parte del procesamiento puede hacerse fuera de la UE salvo con Zero Retention Mode. Conviene tenerlo
+  en la revisión de RGPD. En la app, la casilla "Voz de alta calidad del servidor" permite desactivarlo.
+- **Coste:** ElevenLabs cobra por caracteres sintetizados, según tu plan.
 
 ## Tests
 

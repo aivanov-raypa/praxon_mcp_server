@@ -11,6 +11,8 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...base, MODEL_PROVIDER: 'anthropic' })).toThrow(/ANTHROPIC_API_KEY/);
     expect(() => loadConfig({ ...base, MYRAYPA_MODE: 'http' })).toThrow(/MYRAYPA_API_URL/);
     expect(() => loadConfig({ ...base, GITHUB_MODE: 'http' })).toThrow(/GITHUB_TOKEN/);
-    expect(loadConfig(base)).toMatchObject({ PORT: 8080, MODEL_PROVIDER: 'scripted', MYRAYPA_MODE: 'fake' });
+    expect(() => loadConfig({ ...base, VOICE_PROVIDER: 'elevenlabs' })).toThrow(/ELEVENLABS_API_KEY/);
+    expect(() => loadConfig({ ...base, ELEVENLABS_OUTPUT_FORMAT: 'pcm_16000' })).toThrow(/mp3/);
+    expect(loadConfig(base)).toMatchObject({ PORT: 8080, MODEL_PROVIDER: 'scripted', MYRAYPA_MODE: 'fake', VOICE_PROVIDER: 'none' });
   });
 });

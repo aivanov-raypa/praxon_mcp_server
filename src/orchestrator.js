@@ -6,11 +6,15 @@ import { appendUserText, trimHistory } from './session.js';
 const MAX_RESULT_CHARS = 8000;
 
 /** Un turno = una peticion del usuario (o una confirmacion) hasta que el asistente termina de responder. */
-function newTurn(requestId) {
+function newTurn(requestId, audio = false) {
   const controller = new AbortController();
   return {
     id: randomUUID(),
     requestId,
+    /** La app admite audio del servidor en este turno. */
+    audio,
+    /** Cola ordenada de mensajes hacia la app: el audio de cada frase se sintetiza en paralelo pero se envia en orden. */
+    out: Promise.resolve(),
     signal: controller.signal,
     get aborted() {
       return controller.signal.aborted;
@@ -39,8 +43,10 @@ export class Orchestrator {
   #config;
   #system;
   #now;
+  #voice;
 
-  constructor({ model, registry, audit, config, systemPrompt, now = Date.now }) {
+  constructor({ model, registry, audit, config, systemPrompt, voice = null, now = Date.now }) {
+    this.#voice = voice;
     this.#model = model;
     this.#registry = registry;
     this.#audit = audit;
@@ -51,8 +57,8 @@ export class Orchestrator {
 
   // ---------- API publica ----------
 
-  handleUserText(session, { text, requestId }, emit) {
-    const turn = this.#startTurn(session, requestId); // interrumpe de inmediato el turno anterior
+  handleUserText(session, { text, requestId, audio }, emit) {
+    const turn = this.#startTurn(session, requestId, audio === 'mp3'); // interrumpe de inmediato el turno anterior
     return session.runExclusive(async () => {
       if (session.pending) {
         // "Solo se ejecuta si el siguiente mensaje es una confirmacion explicita": cualquier otro mensaje la anula.
@@ -64,6 +70,7 @@ export class Orchestrator {
       trimHistory(session.history, this.#config.MAX_HISTORY_MESSAGES);
       if (turn.aborted) return; // lo ha superado un mensaje mas reciente
       await this.#loop(session, turn, emit);
+      await turn.out; // no termina el turno hasta haber enviado todo (incluido el audio)
     });
   }
 
@@ -78,7 +85,7 @@ export class Orchestrator {
       }
       const pending = session.pending;
       session.pending = null;
-      const turn = this.#startTurn(session, pending.turn.requestId);
+      const turn = this.#startTurn(session, pending.turn.requestId, pending.turn.audio);
       const { assistantContent, toolUses, index, results } = pending.turn;
       const tu = toolUses[index];
       await this.#log({ event: 'confirm_result', sessionId: session.id, user: session.user, actionId, tool: pending.toolName, outcome: accepted ? 'accepted' : 'declined' });
@@ -94,6 +101,7 @@ export class Orchestrator {
       }
       const outcome = await this.#runTools(session, turn, assistantContent, toolUses, index + 1, results, emit);
       if (outcome === 'done') await this.#loop(session, turn, emit);
+      await turn.out;
     });
   }
 
@@ -117,21 +125,47 @@ export class Orchestrator {
 
   // ---------- Internos ----------
 
-  #startTurn(session, requestId) {
+  #startTurn(session, requestId, audio = false) {
     session.currentTurn?.abort();
-    const turn = newTurn(requestId);
+    const turn = newTurn(requestId, audio);
     session.currentTurn = turn;
     return turn;
   }
 
+  /** Encola un mensaje para la app, manteniendo el orden. No se envia si el turno se ha interrumpido. */
   #say(turn, emit, msg) {
+    turn.out = turn.out.then(() => this.#deliver(turn, emit, msg));
+  }
+
+  /** Una frase de la respuesta: con audio de ElevenLabs si la app lo admite; si falla, solo texto (voz de Android). */
+  #sayChunk(turn, emit, text, previousText) {
+    if (!turn.audio || !this.#voice) {
+      this.#say(turn, emit, { type: 'assistant_chunk', text });
+      return;
+    }
+    const audio = this.#voice.synthesize(text, { signal: turn.signal, previousText }).catch(() => null); // empieza ya, en paralelo
+    turn.out = turn.out.then(async () => {
+      const a = await audio;
+      this.#deliver(turn, emit, a ? { type: 'assistant_audio', text, format: a.format, data: a.data } : { type: 'assistant_chunk', text });
+    });
+  }
+
+  #deliver(turn, emit, msg) {
     if (turn.aborted) return;
-    emit(turn.requestId ? { ...msg, requestId: turn.requestId } : msg);
+    try {
+      emit(turn.requestId ? { ...msg, requestId: turn.requestId } : msg);
+    } catch (err) {
+      console.error('[envio]', err.message);
+    }
   }
 
   async #loop(session, turn, emit) {
     for (let step = 0; step < this.#config.MAX_TOOL_ITERATIONS; step++) {
-      const chunker = new SentenceChunker((text) => this.#say(turn, emit, { type: 'assistant_chunk', text }));
+      let previous = '';
+      const chunker = new SentenceChunker((text) => {
+        this.#sayChunk(turn, emit, text, previous);
+        previous = text;
+      });
       let message;
       try {
         for await (const ev of this.#model.stream({
@@ -202,11 +236,18 @@ export class Orchestrator {
           summary,
           ttlMs: this.#config.CONFIRM_TTL_MS,
           now: this.#now(),
-          turn: { assistantContent, toolUses, index: k, results, requestId: turn.requestId },
+          turn: { assistantContent, toolUses, index: k, results, requestId: turn.requestId, audio: turn.audio },
         });
         session.pending = pending;
         await this.#log({ event: 'confirm_requested', sessionId: session.id, user: session.user, actionId: pending.actionId, tool: tool.name, args: parsed.data, summary });
-        this.#say(turn, emit, { type: 'confirm_request', actionId: pending.actionId, summary });
+        // La pregunta se lee con la misma voz que el resto; si no hay audio, la app la lee con la de Android.
+        const spoken = turn.audio && this.#voice ? await this.#voice.synthesize(`${summary}. ¿Confirmas?`, { signal: turn.signal }).catch(() => null) : null;
+        this.#say(turn, emit, {
+          type: 'confirm_request',
+          actionId: pending.actionId,
+          summary,
+          ...(spoken && { audio: { format: spoken.format, data: spoken.data } }),
+        });
         return 'paused';
       }
 
