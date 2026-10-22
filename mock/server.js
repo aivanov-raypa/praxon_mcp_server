@@ -49,13 +49,13 @@ wss.on('connection', (ws, req) => {
       const text = String(msg.text || '').toLowerCase();
 
       // Simula una acción de escritura: requiere confirmación
-      if (/(pasa|pon|marca|cambia)/.test(text) && text.includes('urgente')) {
+      if (/(pasa|pon|marca|cambia)/.test(text) && /\balta\b/.test(text)) {
         const actionId = randomUUID();
-        pending.set(actionId, { ticket: 214, change: 'prioridad urgente' });
+        pending.set(actionId, { ticket: 'Faltantes OF semana 43', change: 'prioridad alta' });
         send({
           type: 'confirm_request',
           actionId,
-          summary: 'Voy a pasar el ticket 214, Faltantes OF semana 43, a prioridad urgente',
+          summary: 'Voy a cambiar el ticket Faltantes OF semana 43: prioridad de media a alta',
         });
         return;
       }
@@ -63,7 +63,7 @@ wss.on('connection', (ws, req) => {
       // Simula una consulta
       await say([
         'En Calibraciones hay tres tickets abiertos.',
-        'El más urgente es el 214, Faltantes OF semana 43, asignado a producción.',
+        'El más prioritario es Alarma del datalogger sin leer, prioridad alta, asignado a mantenimiento.',
         '¿Quieres el detalle de alguno?',
       ]);
       return;

@@ -30,7 +30,7 @@ src/
   model/                  anthropic.js (real) y scripted.js (pruebas, sin API)
   voice/elevenlabs.js     voz de las respuestas con ElevenLabs (opcional)
   audit/log.js            log JSONL
-docs/                     protocol.md (app<->servidor), myraypa-api.md (API que debe ofrecer MyRAYPA)
+docs/                     protocol.md (app<->servidor), myraypa-api.md (API de MyRAYPA que consume el servidor)
 mock/                     servidor de protocolo minimo
 ```
 
@@ -94,9 +94,37 @@ de riesgos, la auditoría obligatoria, las interrupciones, los agentes y el fluj
 
 ## Pendiente
 
-- Validar con la API real de MyRAYPA qué rutas existen y crear las que falten (`docs/myraypa-api.md`).
+- Probar contra una base de datos real con muchos proyectos y tickets (la API está implementada; ver `docs/myraypa-api.md`).
 - Tokens por usuario en vez de uno compartido (hoy el log usa `PRAXON_USER`).
 - Auditoría también en MyRAYPA (historial del ticket y AgentRun), además del fichero local.
 - `wss://` con certificado interno, y desplegar como proceso gestionado (PM2) en el servidor local.
 - Decidir el proveedor del modelo (API directa, Bedrock o Vertex con región UE) y la revisión de RGPD.
 - Servir las herramientas también como servidor MCP (`src/mcp/`).
+
+## Probar contra MyRAYPA real, todo en local
+
+1. **Backend de MyRAYPA** (`raypa-platform/backend`): añade a su `.env`
+
+   ```
+   ASSISTANT_API_TOKEN=<cadena aleatoria de 32+ caracteres>
+   ASSISTANT_USER_EMAIL=<email de un usuario existente de MyRAYPA>
+   ```
+
+   y arráncalo (puerto 4000 por defecto).
+2. **Habilita un proyecto** para el asistente (desde el backend):
+
+   ```
+   node --env-file=.env scripts/assistant-enable-project.js --list
+   node --env-file=.env scripts/assistant-enable-project.js <projectId> --autonomy tickets
+   ```
+
+3. **Comprueba la API** (PowerShell: usa `curl.exe`):
+
+   ```
+   curl.exe -H "Authorization: Bearer <ASSISTANT_API_TOKEN>" http://localhost:4000/api/assistant/projects
+   ```
+
+4. **Servidor Praxon**: en su `.env` pon `MYRAYPA_MODE=http`, `MYRAYPA_API_URL=http://localhost:4000/api` y
+   `MYRAYPA_API_TOKEN=<el mismo token>`. Arranca con `run.ps1`.
+5. **Móvil en la misma wifi**: en la app, `ws://<IP-del-PC>:8080/ws` y el `PRAXON_TOKEN`. El móvil solo habla con
+   el servidor Praxon; nunca con MyRAYPA.

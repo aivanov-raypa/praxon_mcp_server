@@ -5,7 +5,8 @@ import { MyraypaError } from './errors.js';
  * propia de permisos acotados, nunca directamente con MongoDB. El filtro de proyectos habilitados y el
  * nivel de autonomia por proyecto los aplica la API, no el modelo.
  *
- * RUTAS: propuesta pendiente de validar con la API real (ver docs/myraypa-api.md). Estan todas aqui.
+ * RUTAS: implementadas en raypa-platform (backend/routes/assistant.routes.js, montadas en /api/assistant).
+ * Contrato completo en docs/myraypa-api.md. Estan todas aqui.
  */
 export const ROUTES = {
   projects: () => '/assistant/projects',
@@ -56,8 +57,8 @@ export class HttpMyraypaClient {
   listProjects() {
     return this.#request('GET', ROUTES.projects());
   }
-  listTickets({ proyectoId, estado, prioridad, asignado, texto, limit } = {}) {
-    return this.#request('GET', ROUTES.tickets(), { query: { proyecto: proyectoId, estado, prioridad, asignado, texto, limit } });
+  listTickets({ proyectoId, estado, prioridad, asignado, texto, mostrar, limit } = {}) {
+    return this.#request('GET', ROUTES.tickets(), { query: { proyecto: proyectoId, estado, prioridad, asignado, texto, mostrar, limit } });
   }
   getTicket(id) {
     return this.#request('GET', ROUTES.ticket(id));

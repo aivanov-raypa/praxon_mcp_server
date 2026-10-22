@@ -133,7 +133,7 @@ describe('audio en las respuestas', () => {
   it('la pregunta de confirmacion lleva su audio, y tambien la respuesta tras confirmar', async () => {
     const voice = new FakeVoice();
     const s = setup({ voice });
-    await s.orchestrator.handleUserText(s.session, { text: 'Pasa el de los faltantes a urgente', audio: 'mp3' }, s.emit);
+    await s.orchestrator.handleUserText(s.session, { text: 'Pasa el de los faltantes a alta', audio: 'mp3' }, s.emit);
     const req = s.last('confirm_request');
     expect(Buffer.from(req.audio.data, 'base64').toString()).toBe(`audio:${req.summary}. ¿Confirmas?`);
     await s.orchestrator.handleConfirm(s.session, { actionId: req.actionId, accepted: true }, s.emit);
@@ -144,7 +144,7 @@ describe('audio en las respuestas', () => {
     const voice = new FakeVoice();
     voice.failWhen = (t) => t.endsWith('¿Confirmas?');
     const s = setup({ voice });
-    await s.orchestrator.handleUserText(s.session, { text: 'Pasa el de los faltantes a urgente', audio: 'mp3' }, s.emit);
+    await s.orchestrator.handleUserText(s.session, { text: 'Pasa el de los faltantes a alta', audio: 'mp3' }, s.emit);
     expect(s.last('confirm_request').audio).toBeUndefined();
   });
 

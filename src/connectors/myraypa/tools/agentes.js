@@ -19,7 +19,7 @@ export function agentesTools(client, github) {
         const tk = await client.getTicket(a.ticketId);
         if (tk.proyecto.autonomia !== 'agentes') throw new Error(`El proyecto ${tk.proyecto.nombre} no permite lanzar agentes.`);
         if (!tk.proyecto.repo) throw new Error(`El proyecto ${tk.proyecto.nombre} no tiene repositorio asociado.`);
-        return `Voy a lanzar un agente de ${a.tipo} sobre el ticket ${tk.id}, ${tk.titulo}, en el repositorio ${tk.proyecto.repo}`;
+        return `Voy a lanzar un agente de ${a.tipo} sobre el ticket ${tk.titulo}, en el repositorio ${tk.proyecto.repo}`;
       },
       execute: async (a, { session }) => {
         const run = await client.createAgentRun(a, originOf(session));
@@ -52,7 +52,8 @@ export function agentesTools(client, github) {
       summarize: async (a) => {
         const run = await client.getAgentRun({ runId: a.runId });
         if (!run) throw new Error(`No existe el agente ${a.runId}.`);
-        return `Voy a cancelar el agente ${run.runId} del ticket ${run.ticketId}`;
+        const tk = await client.getTicket(run.ticketId).catch(() => null);
+        return `Voy a cancelar el agente ${tk ? `del ticket ${tk.titulo}` : run.runId}`;
       },
       execute: async (a, { session }) => {
         const run = await client.getAgentRun({ runId: a.runId });

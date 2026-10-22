@@ -1,11 +1,11 @@
 /**
  * Modelo guionizado para desarrollo y pruebas: no llama a ninguna API. Entiende unas pocas frases
- * (consultas de tickets, "pasa el de los faltantes a urgente") para poder probar el flujo completo
+ * (consultas de tickets, "pasa el de los faltantes a alta") para poder probar el flujo completo
  * app -> servidor -> herramientas -> confirmacion sin gastar tokens. No es un modelo de verdad.
  */
 const PROYECTOS = ['calibraciones', 'mes', 'incidencias'];
 const STOP = new Set(
-  'el la los las de del a al pasa pon marca cambia ticket tickets urgente que hay en un una y por favor prioridad con lo para es'.split(' '),
+  'el la los las de del a al pasa pon marca cambia ticket tickets alta que hay en un una y por favor prioridad con lo para es'.split(' '),
 );
 
 const norm = (s) =>
@@ -30,7 +30,7 @@ function latestUserText(messages) {
   return '';
 }
 
-const isWriteIntent = (t) => /\b(pasa|pon|marca|cambia)\b/.test(norm(t)) && norm(t).includes('urgente');
+const isWriteIntent = (t) => /\b(pasa|pon|marca|cambia)\b/.test(norm(t)) && /\balta\b/.test(norm(t));
 const projectIn = (t) => PROYECTOS.find((p) => words(t).includes(p));
 
 function plan(userText) {
@@ -42,8 +42,8 @@ function plan(userText) {
   }
   if (t.includes('proyectos')) return [toolUse('myraypa_listar_proyectos', {})];
   if (t.includes('resumen')) return [toolUse('myraypa_resumen_proyecto', { proyectoId: proyectoId ?? 'calibraciones' })];
-  if (/(que hay|abierto|abiertos|tickets|urgente|pendiente)/.test(t)) {
-    return [toolUse('myraypa_listar_tickets', { ...(proyectoId && { proyectoId }), estado: 'abierto', limite: 5 })];
+  if (/(que hay|abierto|abiertos|tickets|prioritario|pendiente)/.test(t)) {
+    return [toolUse('myraypa_listar_tickets', { ...(proyectoId && { proyectoId }), mostrar: 'abiertos', limite: 5 })];
   }
   return [text('No te he entendido. Puedes preguntarme por tickets o proyectos.')];
 }
@@ -68,18 +68,18 @@ function afterTools(messages, userText) {
       const list = data.tickets ?? [];
       if (isWriteIntent(userText)) {
         if (list.length === 0) return [text('No encuentro ningún ticket con eso.')];
-        if (list.length === 1) return [toolUse('myraypa_actualizar_ticket', { ticketId: list[0].id, prioridad: 'urgente' })];
-        return [text(`He encontrado ${list.length} tickets parecidos: ${list.map((tk) => `el ${tk.id}, ${tk.titulo}`).join('; ')}. ¿Cuál quieres?`)];
+        if (list.length === 1) return [toolUse('myraypa_actualizar_ticket', { ticketId: list[0].id, prioridad: 'alta' })];
+        return [text(`He encontrado ${list.length} tickets parecidos: ${list.map((tk) => tk.titulo).join('; ')}. ¿Cuál quieres?`)];
       }
       if (list.length === 0) return [text('No hay tickets que coincidan.')];
       const top = list[0];
-      return [text(`Hay ${data.total} tickets abiertos. El más prioritario es el ${top.id}, ${top.titulo}, prioridad ${top.prioridad}. ¿Quieres el detalle de alguno?`)];
+      return [text(`Hay ${data.total} tickets abiertos. El más prioritario es ${top.titulo}, prioridad ${top.prioridad}. ¿Quieres el detalle de alguno?`)];
     }
     case 'myraypa_resumen_proyecto':
-      return [text(`El proyecto ${data.proyecto} tiene ${data.total} tickets y ${data.urgentes.length} urgentes abiertos.`)];
+      return [text(`El proyecto ${data.proyecto} tiene ${data.abiertos} tickets abiertos y ${data.prioritarios.length} de prioridad alta.`)];
     case 'myraypa_actualizar_ticket':
       if (data.cancelada) return [text('Cancelado. No he cambiado nada.')];
-      return [text(`Hecho. El ticket ${data.ticketId} ya está actualizado.`)];
+      return [text(`Hecho. El ticket ${data.titulo} ya está actualizado.`)];
     default:
       return [text(data.cancelada ? 'Cancelado. No he cambiado nada.' : 'Hecho.')];
   }

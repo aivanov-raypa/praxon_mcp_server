@@ -43,19 +43,19 @@ describe('servidor WebSocket', () => {
   it('flujo completo: escritura con confirmacion', async () => {
     const { port } = await start();
     const ws = await open(port);
-    send(ws, { type: 'user_text', sessionId: 'sesion-app-0001', text: 'Pasa el de los faltantes a urgente' });
+    send(ws, { type: 'user_text', sessionId: 'sesion-app-0001', text: 'Pasa el de los faltantes a alta' });
     const req = await waitFor(ws, (m) => m.type === 'confirm_request');
-    expect(req.summary).toContain('ticket 214');
+    expect(req.summary).toContain('Faltantes OF semana 43');
     send(ws, { type: 'confirm', sessionId: 'sesion-app-0001', actionId: req.actionId, accepted: true });
     await waitFor(ws, (m) => m.type === 'assistant_done');
-    expect(app.myraypa.tickets.find((t) => t.id === 214).prioridad).toBe('urgente');
+    expect(app.myraypa.tickets.find((t) => t.id === '214').prioridad).toBe('alta');
     ws.close();
   });
 
   it('una accion pendiente muere con la conexion', async () => {
     const { port } = await start();
     const ws = await open(port);
-    send(ws, { type: 'user_text', sessionId: 'sesion-app-0002', text: 'Pasa el de los faltantes a urgente' });
+    send(ws, { type: 'user_text', sessionId: 'sesion-app-0002', text: 'Pasa el de los faltantes a alta' });
     const req = await waitFor(ws, (m) => m.type === 'confirm_request');
     ws.close();
     await new Promise((r) => setTimeout(r, 150));
@@ -64,7 +64,7 @@ describe('servidor WebSocket', () => {
     send(ws2, { type: 'confirm', sessionId: 'sesion-app-0002', actionId: req.actionId, accepted: true });
     const err = await waitFor(ws2, (m) => m.type === 'error');
     expect(err.message).toMatch(/No hay ninguna acción pendiente/);
-    expect(app.myraypa.tickets.find((t) => t.id === 214).prioridad).toBe('alta');
+    expect(app.myraypa.tickets.find((t) => t.id === '214').prioridad).toBe('media');
     ws2.close();
   });
 

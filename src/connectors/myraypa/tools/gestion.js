@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import { defineTool } from '../../../tools/registry.js';
-import { ESTADOS, PRIORIDADES, originOf, proyectoId, recorta, ticketId } from './shared.js';
+import { PRIORIDADES, estado, originOf, proyectoId, recorta, ticketId } from './shared.js';
 
-const etiqueta = (tk) => `ticket ${tk.id}, ${tk.titulo}`;
+// Los tickets de MyRAYPA no tienen número: se nombran por su título.
+const etiqueta = (tk) => `ticket ${tk.titulo}`;
 
 /**
  * Herramientas que modifican datos reales. El orquestador NO las ejecuta hasta que el usuario confirma;
@@ -34,21 +35,23 @@ export function gestionTools(client) {
       connector,
       name: 'actualizar_ticket',
       risk: 'write',
-      description: 'Cambia el estado, la prioridad o el asignado de un ticket que ya has localizado.',
+      description: 'Cambia el estado, la prioridad, el asignado o marca como completado (o reabre) un ticket que ya has localizado. La prioridad más alta es "alta"; no existe "urgente".',
       input: z
         .object({
           ticketId,
-          estado: z.enum(ESTADOS).optional(),
+          estado: estado.optional(),
           prioridad: z.enum(PRIORIDADES).optional(),
           asignado: z.string().max(80).optional(),
+          completado: z.boolean().optional().describe('true = marcar como completado; false = reabrir'),
         })
-        .refine((a) => a.estado || a.prioridad || a.asignado, { message: 'indica al menos un cambio' }),
+        .refine((a) => a.estado || a.prioridad || a.asignado || a.completado !== undefined, { message: 'indica al menos un cambio' }),
       summarize: async (a) => {
         const tk = await client.getTicket(a.ticketId);
         const cambios = ['estado', 'prioridad', 'asignado']
           .filter((c) => a[c] !== undefined && a[c] !== tk[c])
           .map((c) => `${c} ${tk[c] ? `de ${tk[c]} ` : ''}a ${a[c]}`);
-        if (!cambios.length) throw new Error(`El ticket ${tk.id} ya tiene esos valores; no hay nada que cambiar.`);
+        if (a.completado !== undefined && a.completado !== tk.completado) cambios.push(a.completado ? 'marcarlo como completado' : 'reabrirlo');
+        if (!cambios.length) throw new Error(`El ticket ${tk.titulo} ya tiene esos valores; no hay nada que cambiar.`);
         return `Voy a cambiar el ${etiqueta(tk)}: ${cambios.join(' y ')}`;
       },
       execute: async ({ ticketId: id, ...cambios }, { session }) => client.updateTicket(id, cambios, originOf(session)),
@@ -69,7 +72,7 @@ export function gestionTools(client) {
       connector,
       name: 'reordenar_prioridades',
       risk: 'write',
-      description: 'Reordena la prioridad de varios tickets de un proyecto: el primero de la lista es el más prioritario.',
+      description: 'Reordena varios tickets de un proyecto: el primero de la lista queda el primero (posición en el tablero). No cambia el campo prioridad.',
       input: z.object({ proyectoId, orden: z.array(ticketId).min(2).max(20) }),
       summarize: async (a) => {
         const proyecto = (await client.listProjects()).find((p) => p.id === a.proyectoId);
