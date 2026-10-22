@@ -82,6 +82,22 @@ ElevenLabs y llega a la app como audio mp3; la app la reproduce en orden. Por de
   en la revisión de RGPD. En la app, la casilla "Voz de alta calidad del servidor" permite desactivarlo.
 - **Coste:** ElevenLabs cobra por caracteres sintetizados, según tu plan.
 
+## Revisión automática y propuestas
+
+El asistente puede trabajar sin que le preguntes: revisa los tickets por su cuenta, deja un resumen y **acciones preparadas
+sin ejecutar** (por ejemplo, subir de prioridad un ticket) para que solo tengas que aprobarlas o descartarlas.
+
+- Se activa con `TRIAGE_ENABLED=true` y corre a las horas de `TRIAGE_TIMES` (hora de Madrid, por defecto `08:30`). También se
+  puede lanzar a mano con `proposals_run` desde la app. Necesita el modelo real (`MODEL_PROVIDER=anthropic`); con el modelo
+  guionizado hace una revisión de prueba.
+- El modelo solo puede consultar y proponer. Las acciones permitidas son las de `TRIAGE_ALLOWED_TOOLS`; los agentes, los
+  roadmaps y los merges quedan fuera.
+- Al aprobar, se comprueba que el ticket no ha cambiado desde la propuesta (si cambió, queda `obsoleta`) y la ejecución se
+  audita. Las propuestas caducan a las `PROPOSAL_TTL_HOURS` (48 por defecto) y se guardan en `PROPOSALS_PATH`.
+- Por voz: «¿qué has detectado?» usa las propuestas pendientes y «aplica la primera» pasa por la confirmación normal.
+
+Protocolo con la app en `docs/protocol.md`. Las notificaciones push (aviso con la app cerrada) están pendientes.
+
 ## Tests
 
 ```powershell

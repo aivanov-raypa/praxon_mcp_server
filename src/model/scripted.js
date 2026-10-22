@@ -85,8 +85,36 @@ function afterTools(messages, userText) {
   }
 }
 
+/** Revision automatica de prueba: lista tickets abiertos, propone subir a alta el primero de prioridad media y resume. */
+function triagePlan(messages) {
+  const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
+  const used = lastAssistant?.content.filter((b) => b.type === 'tool_use').map((b) => b.name) ?? [];
+  const lastResults = messages.at(-1).content?.filter?.((b) => b.type === 'tool_result') ?? [];
+  if (!lastAssistant) return [toolUse('myraypa_listar_tickets', { mostrar: 'abiertos', limite: 10 })];
+  if (used.includes('myraypa_listar_tickets')) {
+    let tickets = [];
+    try {
+      tickets = JSON.parse(lastResults[0].content).tickets ?? [];
+    } catch {
+      /* sin datos */
+    }
+    const media = tickets.find((tk) => tk.prioridad === 'media');
+    if (media) {
+      return [toolUse('proponer_accion', { herramienta: 'myraypa_actualizar_ticket', parametros: { ticketId: media.id, prioridad: 'alta' }, motivo: 'Es lo más relevante de los tickets abiertos y sigue en prioridad media.' })];
+    }
+  }
+  const n = tickets_count(messages);
+  return [toolUse('entregar_resumen', { resumen: n ? `He revisado los tickets abiertos y te dejo una propuesta para aprobar.` : 'He revisado los tickets y no hay nada que requiera acción ahora.' })];
+}
+const tickets_count = (messages) => JSON.stringify(messages).includes('proponer_accion') ? 1 : 0;
+
 export class ScriptedModel {
-  async *stream({ messages }) {
+  async *stream({ system = '', messages }) {
+    if (String(system).includes('[[REVISION_AUTOMATICA]]')) {
+      const content = triagePlan(messages);
+      yield { type: 'message', content, stopReason: 'tool_use' };
+      return;
+    }
     const last = messages.at(-1);
     const userText = latestUserText(messages);
     const afterToolResults = last.role === 'user' && Array.isArray(last.content) && last.content.some((b) => b.type === 'tool_result');

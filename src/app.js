@@ -10,6 +10,10 @@ import { ScriptedModel } from './model/scripted.js';
 import { Orchestrator } from './orchestrator.js';
 import { createServer } from './server.js';
 import { ToolRegistry } from './tools/registry.js';
+import { ProposalStore } from './proposals/store.js';
+import { Triage } from './proposals/triage.js';
+import { TriageScheduler } from './proposals/scheduler.js';
+import { proposalTools } from './proposals/tools.js';
 
 /** Monta todas las piezas segun la configuracion. Los `overrides` permiten sustituirlas en los tests. */
 export function createApp(config, overrides = {}) {
@@ -46,6 +50,11 @@ export function createApp(config, overrides = {}) {
   // con las mismas reglas de riesgo, confirmacion y auditoria.
   const registry = new ToolRegistry().registerConnector(createMyraypaConnector({ client: myraypa, github }));
 
+  // Revision automatica: el asistente analiza por su cuenta y deja propuestas; solo se ejecutan si el usuario las aprueba.
+  const store = overrides.proposalStore ?? new ProposalStore(config.PROPOSALS_PATH);
+  const triage = new Triage({ model, registry, audit, store, config, now: overrides.now });
+  registry.registerConnector({ name: 'praxon', tools: proposalTools({ store, triage }) });
+
   const orchestrator = new Orchestrator({
     model,
     registry,
@@ -56,6 +65,15 @@ export function createApp(config, overrides = {}) {
     voice,
     now: overrides.now,
   });
-  const server = createServer({ config, orchestrator, audit });
-  return { server, orchestrator, registry, audit, myraypa, github, model, voice };
+  const server = createServer({ config, orchestrator, audit, triage });
+  // Se arranca desde index.js (start); en los tests no se programa nada.
+  const scheduler = new TriageScheduler({
+    times: config.TRIAGE_TIMES,
+    now: overrides.now,
+    run: async () => {
+      await triage.run({ user: config.PRAXON_USER, trigger: 'schedule' });
+      server.broadcast(triage.view());
+    },
+  });
+  return { server, orchestrator, registry, audit, myraypa, github, model, voice, store, triage, scheduler };
 }

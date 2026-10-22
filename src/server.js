@@ -17,7 +17,7 @@ function tokenOk(header, token) {
  * Servidor WebSocket (/ws) + /health. La autenticacion se hace en el handshake (HTTP 401):
  * sin token valido no se llega a abrir el WebSocket.
  */
-export function createServer({ config, orchestrator, audit, sessions = new SessionStore() }) {
+export function createServer({ config, orchestrator, audit, triage = null, sessions = new SessionStore() }) {
   const http = createHttpServer((req, res) => {
     if (req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"status":"ok"}');
@@ -38,6 +38,31 @@ export function createServer({ config, orchestrator, audit, sessions = new Sessi
     verifyClient: (info, done) => done(tokenOk(info.req.headers.authorization, config.PRAXON_TOKEN), 401, 'Unauthorized'),
   });
 
+  const broadcast = (msg) => {
+    for (const client of wss.clients) if (client.readyState === client.OPEN) client.send(JSON.stringify(msg));
+  };
+
+  async function handleProposals(msg, emit, broadcast) {
+    if (!triage) {
+      emit({ type: 'error', message: 'La revisión automática no está disponible.' });
+    } else if (msg.type === 'proposals_list') {
+      emit(triage.view());
+    } else if (msg.type === 'proposals_run') {
+      const r0 = triage.running;
+      broadcast({ ...triage.view(), running: true });
+      const r = await triage.run({ user: config.PRAXON_USER, trigger: 'manual' }).catch((err) => {
+        console.error('[revision]', err.message);
+        emit({ type: 'error', message: 'No he podido hacer la revisión. Inténtalo de nuevo.' });
+        return null;
+      });
+      if (r || r0) broadcast(triage.view());
+    } else {
+      const r = await triage.decide({ briefingId: msg.briefingId, actionId: msg.actionId, accepted: msg.accepted, user: config.PRAXON_USER });
+      emit({ type: 'proposal_result', briefingId: msg.briefingId, actionId: msg.actionId, ...r });
+      broadcast(triage.view());
+    }
+  }
+
   const log = (event) => audit.record(event).catch((err) => console.error('[auditoria]', err.message));
 
   wss.on('connection', (ws, req) => {
@@ -57,6 +82,13 @@ export function createServer({ config, orchestrator, audit, sessions = new Sessi
         msg = clientMessage.parse(JSON.parse(raw));
       } catch {
         emit({ type: 'error', message: 'Mensaje no válido.' });
+        return;
+      }
+      if (msg.type.startsWith('proposal')) {
+        handleProposals(msg, emit, broadcast).catch((err) => {
+          console.error('[propuestas]', err);
+          emit({ type: 'error', message: 'No he podido gestionar las propuestas.' });
+        });
         return;
       }
       const session = sessions.get(msg.sessionId, config.PRAXON_USER);
@@ -104,6 +136,7 @@ export function createServer({ config, orchestrator, audit, sessions = new Sessi
     http,
     wss,
     sessions,
+    broadcast,
     listen: () =>
       new Promise((resolve) => {
         http.listen(config.PORT, config.HOST, () => resolve(http.address().port));

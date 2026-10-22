@@ -25,4 +25,13 @@ export const clientMessage = z.discriminatedUnion('type', [
     type: z.literal('cancel'),
     sessionId,
   }),
+  // Propuestas de la revision automatica (no pertenecen a ninguna conversacion: no llevan sessionId).
+  z.object({ type: z.literal('proposals_list') }),
+  z.object({ type: z.literal('proposals_run') }),
+  z.object({
+    type: z.literal('proposal_decision'),
+    briefingId: z.string().min(1).max(100),
+    actionId: z.string().min(1).max(100),
+    accepted: z.boolean(),
+  }),
 ]);

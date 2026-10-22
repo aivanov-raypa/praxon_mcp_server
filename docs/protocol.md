@@ -47,3 +47,43 @@ conversación, pero **una acción pendiente de confirmar nunca sobrevive a un co
 3. Una escritura no se ejecuta si no se puede registrar en el log de auditoría.
 4. Toda acción deja una línea en el log (`AUDIT_LOG_PATH`): quién, cuándo, transcripción original,
    herramienta, parámetros y resultado.
+
+## Propuestas de la revisión automática
+
+El servidor puede revisar los tickets por su cuenta (a las horas de `TRIAGE_TIMES`, o cuando la app lo pide) y dejar un
+resumen con acciones **preparadas pero sin ejecutar**. Estos mensajes no pertenecen a ninguna conversación: no llevan `sessionId`.
+
+### app → servidor
+
+```json
+{ "type": "proposals_list" }
+{ "type": "proposals_run" }
+{ "type": "proposal_decision", "briefingId": "...", "actionId": "...", "accepted": true }
+```
+
+- `proposals_list`: pide el estado actual. `proposals_run`: lanza una revisión ahora.
+- `proposal_decision`: aprueba (`accepted: true`) o descarta una acción. Es la única forma de que se ejecute.
+
+### servidor → app
+
+```json
+{ "type": "proposals", "pendientes": 2, "running": false,
+  "briefings": [ { "id": "...", "createdAt": "2026-10-23T06:30:00.000Z", "trigger": "schedule", "resumen": "...",
+    "acciones": [ { "id": "...", "herramienta": "myraypa_actualizar_ticket", "resumen": "Voy a cambiar el ticket ...: prioridad de media a alta", "motivo": "...", "estado": "pendiente" } ] } ] }
+{ "type": "proposal_result", "briefingId": "...", "actionId": "...", "ok": true, "estado": "ejecutada", "mensaje": "Hecho." }
+```
+
+- `proposals` se envía como respuesta a `proposals_list` y a **todos los clientes conectados** cuando cambia algo (revisión
+  nueva o decisión). Lleva las 10 revisiones más recientes; los parámetros internos de las acciones no se envían.
+- Estados de una acción: `pendiente`, `ejecutada`, `descartada`, `fallida`, `obsoleta` (el ticket ha cambiado desde la
+  propuesta: no se ejecuta) y `caducada` (pasadas `PROPOSAL_TTL_HOURS`).
+
+### Garantías
+
+- El modelo de la revisión solo puede **consultar** y **proponer**; nunca ejecuta. Solo se pueden proponer las herramientas de
+  `TRIAGE_ALLOWED_TOOLS` (por defecto, cambios de ticket, comentarios, fechas, etiquetas, participantes y subtareas;
+  nada de agentes, roadmaps ni merges).
+- Al aprobar, el servidor vuelve a calcular el resumen con los datos de ese momento: si no coincide con el que viste,
+  la acción queda `obsoleta`. La ejecución se audita (`via: "proposal"`) y no se hace si la auditoría falla.
+- Por voz también se pueden consultar (`praxon_propuestas_pendientes`) y aplicar (`praxon_aplicar_propuesta`, con la
+  confirmación normal de la conversación).

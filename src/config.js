@@ -30,6 +30,23 @@ const schema = z
     ELEVENLABS_BASE_URL: z.string().url().default('https://api.elevenlabs.io'),
     ELEVENLABS_LANGUAGE: z.string().default('es'),
 
+    // Revision automatica: el asistente analiza los tickets por su cuenta y deja propuestas que el usuario aprueba.
+    TRIAGE_ENABLED: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+    TRIAGE_TIMES: z
+      .string()
+      .default('08:30')
+      .transform((v) => v.split(',').map((x) => x.trim()).filter(Boolean))
+      .refine((l) => l.every((x) => /^([01]\d|2[0-3]):[0-5]\d$/.test(x)), 'horas HH:MM separadas por comas (hora de Madrid)'),
+    TRIAGE_ALLOWED_TOOLS: z
+      .string()
+      .default('myraypa_actualizar_ticket,myraypa_comentar_ticket,myraypa_cambiar_fechas_ticket,myraypa_cambiar_etiquetas_ticket,myraypa_cambiar_participantes_ticket,myraypa_crear_subtarea')
+      .transform((v) => v.split(',').map((x) => x.trim()).filter(Boolean)),
+    TRIAGE_MAX_STEPS: z.coerce.number().int().positive().default(14),
+    TRIAGE_MAX_ACTIONS: z.coerce.number().int().positive().default(10),
+    TRIAGE_TIMEOUT_MS: z.coerce.number().int().positive().default(180_000),
+    PROPOSAL_TTL_HOURS: z.coerce.number().positive().default(48),
+    PROPOSALS_PATH: z.string().default('./data/proposals.json'),
+
     CONFIRM_TTL_MS: z.coerce.number().int().positive().default(60_000),
     MAX_TOOL_ITERATIONS: z.coerce.number().int().positive().default(6),
     MAX_HISTORY_MESSAGES: z.coerce.number().int().min(4).default(40),

@@ -11,7 +11,7 @@ try {
   process.exit(1);
 }
 
-const { server, registry } = createApp(config);
+const { server, registry, scheduler } = createApp(config);
 const port = await server.listen();
 
 console.log(`${config.ASSISTANT_NAME}: servidor escuchando en el puerto ${port}`);
@@ -28,10 +28,17 @@ if (pairUrls.length) {
   console.log(await qrTerminal(pairingUri({ url: pairUrls[0], token: config.PRAXON_TOKEN, name: config.ASSISTANT_NAME })));
   console.log('El código contiene el acceso al asistente: no lo compartas.');
 }
+if (config.TRIAGE_ENABLED) {
+  scheduler.start();
+  console.log(`Revisión automática: cada día a las ${config.TRIAGE_TIMES.join(', ')} (hora de Madrid). Las acciones solo se ejecutan si las apruebas.`);
+} else {
+  console.log('Revisión automática desactivada (TRIAGE_ENABLED=true para activarla; también se puede lanzar a mano desde la app).');
+}
 if (config.MODEL_PROVIDER === 'scripted') console.log('Aviso: modelo guionizado (solo pruebas). Pon MODEL_PROVIDER=anthropic para el real.');
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, async () => {
+    scheduler.stop();
     await server.close();
     process.exit(0);
   });

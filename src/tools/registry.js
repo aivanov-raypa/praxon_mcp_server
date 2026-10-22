@@ -49,9 +49,9 @@ export class ToolRegistry {
     return [...this.#tools.values()];
   }
 
-  /** Definiciones en el formato de herramientas de la API del modelo. */
-  forModel() {
-    return this.list().map((t) => {
+  /** Definiciones en el formato de herramientas de la API del modelo. `filter` limita cuales se ofrecen. */
+  forModel(filter = () => true) {
+    return this.list().filter(filter).map((t) => {
       const { $schema, ...input_schema } = z.toJSONSchema(t.input);
       return { name: t.name, description: t.description, input_schema };
     });
