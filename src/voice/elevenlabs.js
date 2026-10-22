@@ -12,6 +12,25 @@
  */
 export class VoiceError extends Error {}
 
+/** Motivo que da ElevenLabs en el cuerpo del error (nunca incluye la clave). Vacío si no hay. */
+async function errorDetail(res) {
+  try {
+    const raw = (await res.text()).slice(0, 2000);
+    let detail;
+    try {
+      const j = JSON.parse(raw);
+      detail = typeof j.detail === 'string' ? j.detail : [j.detail?.status, j.detail?.message].filter(Boolean).join(': ') || undefined;
+      if (!detail && Array.isArray(j.detail)) detail = j.detail.map((d) => d.msg).filter(Boolean).join('; ');
+    } catch {
+      detail = raw;
+    }
+    detail = String(detail ?? '').replace(/\s+/g, ' ').trim().slice(0, 300);
+    return detail ? ` (${detail})` : '';
+  } catch {
+    return '';
+  }
+}
+
 export class ElevenLabsVoice {
   #apiKey;
   #voiceId;
@@ -85,7 +104,7 @@ export class ElevenLabsVoice {
         body: JSON.stringify(body),
         signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
       });
-      if (!res.ok) throw new VoiceError(`ElevenLabs ha respondido ${res.status}.`);
+      if (!res.ok) throw new VoiceError(`ElevenLabs ha respondido ${res.status}${await errorDetail(res)}.`);
       const bytes = Buffer.from(await res.arrayBuffer());
       if (bytes.length === 0) throw new VoiceError('ElevenLabs ha devuelto un audio vacío.');
       this.#failures = 0;
@@ -98,6 +117,7 @@ export class ElevenLabsVoice {
 
   #registerFailure(err) {
     this.#failures++;
+    if (this.#failures === 1) console.warn(`[voz] ElevenLabs: ${err.message}`);
     if (this.#failures >= this.#breakerThreshold) {
       this.#openUntil = this.#now() + this.#breakerCooldownMs;
       this.#failures = 0;

@@ -3,6 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { clientMessage } from './protocol.js';
 import { SessionStore } from './session.js';
+import { isLoopback, pairPage } from './pairing.js';
 
 const SESSION_MAX_IDLE_MS = 12 * 60 * 60 * 1000;
 
@@ -20,6 +21,11 @@ export function createServer({ config, orchestrator, audit, sessions = new Sessi
   const http = createHttpServer((req, res) => {
     if (req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"status":"ok"}');
+    } else if (req.url === '/pair' && isLoopback(req.socket.remoteAddress) && !req.headers['x-forwarded-for']) {
+      // Solo desde el propio equipo del servidor: la página contiene el token.
+      pairPage({ config, port: http.address()?.port ?? config.PORT })
+        .then((html) => res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }).end(html))
+        .catch(() => res.writeHead(500).end());
     } else {
       res.writeHead(404).end();
     }

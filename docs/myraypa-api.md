@@ -62,3 +62,40 @@ Errores: `{ "message": "..." }` con 400, 401, 403, 404, 409 o 503; el servidor P
 - El autor en el historial es el usuario de `ASSISTANT_USER_EMAIL`; no hay un usuario "Agente IA" propio.
 - El `AgentRun` se crea en MyRAYPA, pero el disparo del workflow de GitHub sigue en modo `fake` hasta que exista
   `praxon-agent.yml` en el repositorio (ver `GITHUB_MODE`).
+
+## Roadmaps e hitos
+
+Un roadmap es visible para el asistente solo si algún proyecto vinculado (`linkedProjectId` en bloque, tarea o subtarea) está habilitado. Modificarlo exige autonomía `tickets` o superior en alguno de esos proyectos. Las fechas son siempre `AAAA-MM-DD`.
+
+| Método | Ruta | Uso |
+|---|---|---|
+| GET | `/api/assistant/roadmaps?proyecto=&texto=&limit=` | Lista de roadmaps visibles |
+| GET | `/api/assistant/roadmaps/:id` | Detalle: bloques > tareas > subtareas e hitos |
+| POST | `/api/assistant/roadmaps/:id/elementos` | Añadir bloque, tarea o subtarea (`tipo`, `padreId`, `titulo`, `inicio`, `fin`) |
+| PATCH | `/api/assistant/roadmaps/:id/elementos/:elementId` | Cambiar título, fechas o `hecho` |
+| POST/PATCH | `/api/assistant/roadmaps/:id/hitos[/:hitoId]` | Hitos del roadmap |
+| GET/POST/PATCH | `/api/assistant/projects/:id/hitos[/:hitoId]` | Hitos del proyecto |
+
+Herramientas: `listar_roadmaps`, `detalle_roadmap`, `listar_hitos_proyecto` (lectura); `actualizar_elemento_roadmap`, `anadir_elemento_roadmap`, `anadir_hito_roadmap`, `actualizar_hito_roadmap`, `anadir_hito_proyecto`, `actualizar_hito_proyecto` (escritura, con confirmación).
+
+## Detalle ampliado, horas, etiquetas, checklist, campos, subtareas, participantes e informes
+
+Escrituras: autonomía `tickets` o superior; todo queda en el `activityLog` con origen `voice-assistant`. Fechas `AAAA-MM-DD`.
+
+| Método | Ruta | Cuerpo / query |
+|---|---|---|
+| GET | `/assistant/tickets/:id/detalle` | Todo el ticket: horas, etiquetas, checklist, campos, participantes, subtareas |
+| PATCH | `/assistant/tickets/:id/fechas` | `{ inicio?, vencimiento?, estimadoHoras? }` (`null` borra) |
+| POST | `/assistant/tickets/:id/horas` | `{ horas (0-24], nota?, fecha?, usuario? }` |
+| PATCH | `/assistant/tickets/:id/etiquetas` | `{ anadir?: [nombre], quitar?: [nombre] }` (deben existir en el proyecto) |
+| POST | `/assistant/tickets/:id/checklist` | `{ texto }` |
+| PATCH | `/assistant/tickets/:id/checklist/:itemId` | `{ completado?, texto? }`; `itemId` = id, número o parte del texto |
+| PUT | `/assistant/tickets/:id/campos` | `{ campo, valor }` validado según el tipo del campo |
+| POST | `/assistant/tickets/:id/subtareas` | `{ titulo, prioridad?, asignado?, vencimiento? }` (un solo nivel) |
+| PATCH | `/assistant/tickets/:id/participantes` | `{ anadir?, quitar? }` |
+| GET | `/assistant/projects/:id/etiquetas` · `/campos` · `/miembros` | Catálogos del proyecto |
+| GET | `/assistant/projects/:id/informe?desde=&hasta=` | Abiertos/completados, por estado y prioridad, vencidos, horas por persona, desviaciones |
+| GET | `/assistant/informes/carga?proyecto=` | Carga por persona |
+| GET | `/assistant/informes/horas?proyecto=&usuario=&desde=&hasta=` | Horas por persona y proyecto |
+
+Las horas se atribuyen a `usuario` si se indica; si no, al usuario técnico del asistente (con la nota "apuntado por el asistente").

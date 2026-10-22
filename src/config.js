@@ -6,6 +6,7 @@ const schema = z
     HOST: z.string().default('0.0.0.0'),
     PRAXON_TOKEN: z.string().min(12, 'PRAXON_TOKEN debe tener al menos 12 caracteres'),
     PRAXON_USER: z.string().min(1).default('desconocido'),
+    PRAXON_PUBLIC_URL: z.string().regex(/^wss?:\/\/.+/, 'debe empezar por ws:// o wss://').optional(),
     ASSISTANT_NAME: z.string().min(1).default('Praxon'),
 
     MODEL_PROVIDER: z.enum(['scripted', 'anthropic']).default('scripted'),

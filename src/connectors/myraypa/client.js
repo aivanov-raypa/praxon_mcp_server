@@ -17,6 +17,29 @@ export const ROUTES = {
   priorities: (id) => `/assistant/projects/${id}/priorities`,
   runs: () => '/assistant/agent-runs',
   cancelRun: (id) => `/assistant/agent-runs/${id}/cancel`,
+  roadmaps: () => '/assistant/roadmaps',
+  roadmap: (id) => `/assistant/roadmaps/${id}`,
+  roadmapElements: (id) => `/assistant/roadmaps/${id}/elementos`,
+  roadmapElement: (id, elementId) => `/assistant/roadmaps/${id}/elementos/${elementId}`,
+  roadmapMilestones: (id) => `/assistant/roadmaps/${id}/hitos`,
+  roadmapMilestone: (id, hitoId) => `/assistant/roadmaps/${id}/hitos/${hitoId}`,
+  projectMilestones: (id) => `/assistant/projects/${id}/hitos`,
+  projectMilestone: (id, hitoId) => `/assistant/projects/${id}/hitos/${hitoId}`,
+  ticketFull: (id) => `/assistant/tickets/${id}/detalle`,
+  ticketDates: (id) => `/assistant/tickets/${id}/fechas`,
+  ticketHours: (id) => `/assistant/tickets/${id}/horas`,
+  ticketLabels: (id) => `/assistant/tickets/${id}/etiquetas`,
+  ticketChecklist: (id) => `/assistant/tickets/${id}/checklist`,
+  ticketChecklistItem: (id, itemId) => `/assistant/tickets/${id}/checklist/${encodeURIComponent(itemId)}`,
+  ticketFields: (id) => `/assistant/tickets/${id}/campos`,
+  ticketSubtasks: (id) => `/assistant/tickets/${id}/subtareas`,
+  ticketParticipants: (id) => `/assistant/tickets/${id}/participantes`,
+  projectLabels: (id) => `/assistant/projects/${id}/etiquetas`,
+  projectFields: (id) => `/assistant/projects/${id}/campos`,
+  projectMembers: (id) => `/assistant/projects/${id}/miembros`,
+  projectReport: (id) => `/assistant/projects/${id}/informe`,
+  workload: () => '/assistant/informes/carga',
+  hoursReport: () => '/assistant/informes/horas',
 };
 
 export class HttpMyraypaClient {
@@ -84,6 +107,80 @@ export class HttpMyraypaClient {
   async getAgentRun({ runId, ticketId }) {
     const r = await this.#request('GET', ROUTES.runs(), { query: { runId, ticketId } });
     return r ?? null;
+  }
+  // ── Detalle ampliado, horas, etiquetas, checklist, campos, subtareas, participantes e informes ──
+  getTicketFull(id) {
+    return this.#request('GET', ROUTES.ticketFull(id));
+  }
+  setTicketDates(id, cambios, origin) {
+    return this.#request('PATCH', ROUTES.ticketDates(id), { body: { ...cambios, origin } });
+  }
+  logHours(id, datos, origin) {
+    return this.#request('POST', ROUTES.ticketHours(id), { body: { ...datos, origin } });
+  }
+  changeLabels(id, cambios, origin) {
+    return this.#request('PATCH', ROUTES.ticketLabels(id), { body: { ...cambios, origin } });
+  }
+  addChecklistItem(id, texto, origin) {
+    return this.#request('POST', ROUTES.ticketChecklist(id), { body: { texto, origin } });
+  }
+  updateChecklistItem(id, itemId, cambios, origin) {
+    return this.#request('PATCH', ROUTES.ticketChecklistItem(id, itemId), { body: { ...cambios, origin } });
+  }
+  setCustomField(id, datos, origin) {
+    return this.#request('PUT', ROUTES.ticketFields(id), { body: { ...datos, origin } });
+  }
+  createSubtask(id, datos, origin) {
+    return this.#request('POST', ROUTES.ticketSubtasks(id), { body: { ...datos, origin } });
+  }
+  changeParticipants(id, cambios, origin) {
+    return this.#request('PATCH', ROUTES.ticketParticipants(id), { body: { ...cambios, origin } });
+  }
+  listLabels(proyectoId) {
+    return this.#request('GET', ROUTES.projectLabels(proyectoId));
+  }
+  listCustomFields(proyectoId) {
+    return this.#request('GET', ROUTES.projectFields(proyectoId));
+  }
+  listMembers(proyectoId) {
+    return this.#request('GET', ROUTES.projectMembers(proyectoId));
+  }
+  projectReport(proyectoId, { desde, hasta } = {}) {
+    return this.#request('GET', ROUTES.projectReport(proyectoId), { query: { desde, hasta } });
+  }
+  workload({ proyectoId } = {}) {
+    return this.#request('GET', ROUTES.workload(), { query: { proyecto: proyectoId } });
+  }
+  hoursReport({ proyectoId, usuario, desde, hasta } = {}) {
+    return this.#request('GET', ROUTES.hoursReport(), { query: { proyecto: proyectoId, usuario, desde, hasta } });
+  }
+  // ── Roadmaps e hitos ──
+  listRoadmaps({ proyectoId, texto, limit } = {}) {
+    return this.#request('GET', ROUTES.roadmaps(), { query: { proyecto: proyectoId, texto, limit } });
+  }
+  getRoadmap(id) {
+    return this.#request('GET', ROUTES.roadmap(id));
+  }
+  addRoadmapElement(roadmapId, datos, origin) {
+    return this.#request('POST', ROUTES.roadmapElements(roadmapId), { body: { ...datos, origin } });
+  }
+  updateRoadmapElement(roadmapId, elementId, cambios, origin) {
+    return this.#request('PATCH', ROUTES.roadmapElement(roadmapId, elementId), { body: { ...cambios, origin } });
+  }
+  addRoadmapMilestone(roadmapId, datos, origin) {
+    return this.#request('POST', ROUTES.roadmapMilestones(roadmapId), { body: { ...datos, origin } });
+  }
+  updateRoadmapMilestone(roadmapId, hitoId, cambios, origin) {
+    return this.#request('PATCH', ROUTES.roadmapMilestone(roadmapId, hitoId), { body: { ...cambios, origin } });
+  }
+  listProjectMilestones(proyectoId) {
+    return this.#request('GET', ROUTES.projectMilestones(proyectoId));
+  }
+  addProjectMilestone(proyectoId, datos, origin) {
+    return this.#request('POST', ROUTES.projectMilestones(proyectoId), { body: { ...datos, origin } });
+  }
+  updateProjectMilestone(proyectoId, hitoId, cambios, origin) {
+    return this.#request('PATCH', ROUTES.projectMilestone(proyectoId, hitoId), { body: { ...cambios, origin } });
   }
   cancelAgentRun(runId, origin) {
     return this.#request('POST', ROUTES.cancelRun(runId), { body: { origin } });

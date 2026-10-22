@@ -169,7 +169,7 @@ export class Orchestrator {
       let message;
       try {
         for await (const ev of this.#model.stream({
-          system: this.#system,
+          system: typeof this.#system === 'function' ? this.#system(session) : this.#system,
           messages: session.history,
           tools: this.#registry.forModel(),
           model: this.#config.MODEL_DEFAULT,

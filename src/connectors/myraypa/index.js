@@ -1,11 +1,13 @@
 import { agentesTools } from './tools/agentes.js';
 import { consultaTools } from './tools/consulta.js';
 import { gestionTools } from './tools/gestion.js';
+import { extrasTools } from './tools/extras.js';
+import { roadmapsTools } from './tools/roadmaps.js';
 
 /** Conector de MyRAYPA: tickets y proyectos del modulo de Tickets de raypa-platform, y agentes de desarrollo. */
 export function createMyraypaConnector({ client, github }) {
   return {
     name: 'myraypa',
-    tools: [...consultaTools(client), ...gestionTools(client), ...agentesTools(client, github)],
+    tools: [...consultaTools(client), ...gestionTools(client), ...extrasTools(client), ...roadmapsTools(client), ...agentesTools(client, github)],
   };
 }

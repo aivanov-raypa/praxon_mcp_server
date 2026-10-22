@@ -51,7 +51,8 @@ export function createApp(config, overrides = {}) {
     registry,
     audit,
     config,
-    systemPrompt: buildSystemPrompt({ name: config.ASSISTANT_NAME }),
+    // Se reconstruye en cada llamada al modelo: lleva la fecha y el usuario actuales.
+    systemPrompt: (session) => buildSystemPrompt({ name: config.ASSISTANT_NAME, user: session.user }),
     voice,
     now: overrides.now,
   });

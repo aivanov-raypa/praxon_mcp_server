@@ -8,11 +8,13 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/index.js",
     "dev": "node --watch --env-file-if-exists=.env src/index.js",
+    "pair": "node --env-file-if-exists=.env src/pair.js",
     "mock": "node --env-file-if-exists=.env mock/server.js",
     "test": "vitest run"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.1.0",
+    "qrcode": "^1.5.4",
     "ws": "^8.18.0",
     "zod": "^4.0.0"
   },

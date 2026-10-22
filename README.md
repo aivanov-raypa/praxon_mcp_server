@@ -128,3 +128,19 @@ de riesgos, la auditoría obligatoria, las interrupciones, los agentes y el fluj
    `MYRAYPA_API_TOKEN=<el mismo token>`. Arranca con `run.ps1`.
 5. **Móvil en la misma wifi**: en la app, `ws://<IP-del-PC>:8080/ws` y el `PRAXON_TOKEN`. El móvil solo habla con
    el servidor Praxon; nunca con MyRAYPA.
+
+
+## Emparejar la app (QR)
+
+`npm run pair` imprime un código QR con la dirección del servidor y el token (`praxon://pair?...`); la app lo escanea y
+se vincula sin escribir nada. También arranca solo al iniciar el servidor, y `http://localhost:PUERTO/pair` muestra el
+mismo código en una página (solo accesible desde el propio equipo del servidor). El QR **contiene el token**: no lo
+compartas ni lo captures. Con `PRAXON_PUBLIC_URL=wss://dominio/ws` el QR usa esa dirección en lugar de la IP local.
+
+## Cobertura del módulo de tickets
+
+Herramientas de lectura: proyectos, tickets, detalle completo (horas, etiquetas, checklist, campos, subtareas,
+participantes), roadmaps e hitos, etiquetas, campos personalizados, miembros, informes de proyecto, carga de trabajo e
+informe de horas. Escritura (siempre con confirmación): crear/cambiar tickets, comentar, prioridades, fechas y
+estimación, horas, etiquetas, checklist, campos personalizados, subtareas, participantes, elementos e hitos de roadmap
+y agentes. Contrato en `docs/myraypa-api.md`.

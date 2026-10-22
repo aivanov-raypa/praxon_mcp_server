@@ -1,6 +1,7 @@
 import { networkInterfaces } from 'node:os';
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
+import { pairingUri, pairingUrls, qrTerminal } from './pairing.js';
 
 let config;
 try {
@@ -20,6 +21,12 @@ console.log(`Herramientas registradas: ${registry.list().length}`);
 console.log('Direcciones para la app:');
 for (const list of Object.values(networkInterfaces())) {
   for (const i of list ?? []) if (i.family === 'IPv4' && !i.internal) console.log(`  ws://${i.address}:${port}/ws`);
+}
+const pairUrls = pairingUrls(config, port);
+if (pairUrls.length) {
+  console.log(`\nEmparejar la app: escanea este código (o abre http://localhost:${port}/pair en este equipo).`);
+  console.log(await qrTerminal(pairingUri({ url: pairUrls[0], token: config.PRAXON_TOKEN, name: config.ASSISTANT_NAME })));
+  console.log('El código contiene el acceso al asistente: no lo compartas.');
 }
 if (config.MODEL_PROVIDER === 'scripted') console.log('Aviso: modelo guionizado (solo pruebas). Pon MODEL_PROVIDER=anthropic para el real.');
 

@@ -31,6 +31,16 @@ function parsePrioridad(valor) {
   throw new MyraypaError(`Prioridad no válida. Las prioridades son: ${PRIORIDADES.join(', ')}.`, 400);
 }
 
+const FECHA = /^\d{4}-\d{2}-\d{2}$/;
+function fecha(v, campo = 'fecha') {
+  if (v === null || v === undefined || v === '') return null;
+  if (!FECHA.test(String(v)) || Number.isNaN(Date.parse(v))) throw new MyraypaError(`La ${campo} debe tener formato AAAA-MM-DD.`, 400);
+  return String(v);
+}
+function rango(inicio, fin) {
+  if (inicio && fin && fin < inicio) throw new MyraypaError('La fecha de fin no puede ser anterior a la de inicio.', 400);
+}
+
 export class FakeMyraypa {
   constructor() {
     this.proyectos = [
@@ -40,6 +50,7 @@ export class FakeMyraypa {
     ];
     const t = (id, proyectoId, titulo, estadoId, prioridad, asignado) => ({
       id, proyectoId, titulo, descripcion: `${titulo} (dato de ejemplo)`, estadoId, prioridad, completado: false, asignado, comentarios: [],
+      inicio: null, vencimiento: null, estimadoHoras: 0, horas: [], etiquetas: [], checklist: [], campos: {}, participantes: [], parentId: null,
     });
     this.tickets = [
       t('214', 'calibraciones', 'Faltantes OF semana 43', 'todo', 'media', 'producción'),
@@ -49,13 +60,41 @@ export class FakeMyraypa {
       t('401', 'incidencias', 'Escalar a Problem Solving desde incidencia', 'todo', 'media', 'calidad'),
     ];
     this.runs = [];
+    this.etiquetasProyecto = { calibraciones: ['Cliente', 'Backend', 'Urgente'], mes: ['Fábrica'], incidencias: [] };
+    this.camposProyecto = {
+      calibraciones: [
+        { campo: 'Coste', tipo: 'number' },
+        { campo: 'Cliente', tipo: 'select', opciones: ['Acme', 'Beta'] },
+        { campo: 'Entrega', tipo: 'date' },
+      ],
+      mes: [], incidencias: [],
+    };
+    this.miembrosProyecto = { calibraciones: ['ana', 'luis', 'alex'], mes: ['ana'], incidencias: ['luis'] };
+    const n = (id, titulo, inicio, fin, items = []) => ({ id, titulo, inicio, fin, hecho: false, items });
+    this.roadmaps = [
+      {
+        id: 'rm1', titulo: 'Roadmap Calibraciones 2026', subtitulo: null, proyectoId: 'calibraciones', inicio: '2026-09-01', fin: '2026-12-18',
+        bloques: [
+          n('b1', 'Certificados', '2026-09-01', '2026-10-30', [
+            n('t1', 'Exportar a PDF', '2026-09-01', '2026-09-30', [n('s1', 'Plantilla', '2026-09-01', '2026-09-12')]),
+            n('t2', 'Firma digital', '2026-10-01', '2026-10-30'),
+          ]),
+          n('b2', 'Alarmas', '2026-11-02', '2026-12-18', [n('t3', 'Lectura del datalogger', '2026-11-02', '2026-11-27')]),
+        ],
+        hitos: [{ id: 'h1', titulo: 'Entrega a calidad', fecha: '2026-11-15' }],
+      },
+      { id: 'rm2', titulo: 'Roadmap Incidencias', subtitulo: null, proyectoId: 'incidencias', inicio: null, fin: null, bloques: [], hitos: [] },
+    ];
+    this.hitosProyecto = { calibraciones: [{ id: 'ph1', titulo: 'Versión 2.0', fecha: '2026-12-01' }], mes: [], incidencias: [] };
     this.historial = []; // cambios con su origen, para comprobarlos en tests
     this.#nextTicket = 500;
     this.#nextRun = 1;
+    this.#nextId = 1;
   }
 
   #nextTicket;
   #nextRun;
+  #nextId;
 
   #proyecto(id) {
     const p = this.proyectos.find((x) => x.id === id);
@@ -94,7 +133,7 @@ export class FakeMyraypa {
       asignado: tk.asignado || null,
       proyecto: p.nombre,
       proyectoId: p.id,
-      vencimiento: null,
+      vencimiento: tk.vencimiento ?? null,
     };
   }
 
@@ -221,5 +260,344 @@ export class FakeMyraypa {
     run.estado = 'cancelado';
     this.historial.push({ ticketId: run.ticketId, accion: 'cancelar_agente', runId, origin });
     return { ...run };
+  }
+
+  // ── Roadmaps e hitos ──
+  #roadmap(id) {
+    const r = this.roadmaps.find((x) => x.id === id);
+    if (!r) throw new MyraypaError('Roadmap no encontrado o ninguno de sus proyectos está habilitado para el asistente.', 404);
+    return r;
+  }
+
+  #nodo(n) {
+    return { id: n.id, titulo: n.titulo, inicio: n.inicio, fin: n.fin, hecho: n.hecho };
+  }
+
+  #detalle(r) {
+    return {
+      id: r.id, titulo: r.titulo, subtitulo: r.subtitulo, inicio: r.inicio, fin: r.fin, descripcion: null,
+      bloques: r.bloques.map((b) => ({ ...this.#nodo(b), tareas: b.items.map((t) => ({ ...this.#nodo(t), subtareas: t.items.map((x) => this.#nodo(x)) })) })),
+      hitos: r.hitos.map((h) => ({ ...h })),
+    };
+  }
+
+  #buscarNodo(r, id) {
+    for (const b of r.bloques) {
+      if (b.id === id) return { tipo: 'bloque', node: b };
+      for (const t of b.items) {
+        if (t.id === id) return { tipo: 'tarea', node: t };
+        for (const s of t.items) if (s.id === id) return { tipo: 'subtarea', node: s };
+      }
+    }
+    return null;
+  }
+
+  #escribirRoadmap(r) {
+    this.#requiere(this.#proyecto(r.proyectoId), 'tickets');
+  }
+
+  #hito(lista, valor) {
+    const exacto = lista.find((h) => h.id === String(valor));
+    if (exacto) return exacto;
+    const v = norm(valor);
+    const parecidos = v ? lista.filter((h) => norm(h.titulo).includes(v)) : [];
+    if (parecidos.length === 1) return parecidos[0];
+    if (parecidos.length > 1) throw new MyraypaError(`Hay varios hitos que encajan: ${parecidos.map((h) => h.titulo).join(', ')}. Indica cuál.`, 400);
+    throw new MyraypaError('Hito no encontrado.', 404);
+  }
+
+  async listRoadmaps({ proyectoId, texto, limit = 5 } = {}) {
+    if (proyectoId) this.#proyecto(proyectoId);
+    const t = norm(texto);
+    const lista = this.roadmaps.filter((r) => (!proyectoId || r.proyectoId === proyectoId) && (!t || norm(r.titulo).includes(t)));
+    return {
+      total: lista.length,
+      roadmaps: lista.slice(0, limit).map((r) => ({ id: r.id, titulo: r.titulo, subtitulo: r.subtitulo, inicio: r.inicio, fin: r.fin, bloques: r.bloques.length, hitos: r.hitos.length })),
+    };
+  }
+
+  async getRoadmap(id) {
+    return this.#detalle(this.#roadmap(id));
+  }
+
+  async updateRoadmapElement(roadmapId, elementId, cambios, origin) {
+    const r = this.#roadmap(roadmapId);
+    this.#escribirRoadmap(r);
+    const f = this.#buscarNodo(r, elementId);
+    if (!f) throw new MyraypaError('Elemento del roadmap no encontrado.', 404);
+    const { node } = f;
+    const inicio = cambios.inicio !== undefined ? fecha(cambios.inicio, 'fecha de inicio') : node.inicio;
+    const fin = cambios.fin !== undefined ? fecha(cambios.fin, 'fecha de fin') : node.fin;
+    rango(inicio, fin);
+    if (cambios.titulo !== undefined) node.titulo = cambios.titulo;
+    node.inicio = inicio;
+    node.fin = fin;
+    if (cambios.hecho !== undefined) node.hecho = cambios.hecho;
+    this.historial.push({ roadmapId, elementId, accion: 'actualizar_elemento_roadmap', origin });
+    return { ok: true, tipo: f.tipo, ...this.#detalle(r) };
+  }
+
+  async addRoadmapElement(roadmapId, { tipo, padreId, titulo, inicio, fin }, origin) {
+    const r = this.#roadmap(roadmapId);
+    this.#escribirRoadmap(r);
+    const i = fecha(inicio, 'fecha de inicio');
+    const f = fecha(fin, 'fecha de fin');
+    rango(i, f);
+    const nuevo = { id: `n${this.#nextId++}`, titulo, inicio: i, fin: f, hecho: false, items: [] };
+    if (tipo === 'bloque') r.bloques.push(nuevo);
+    else {
+      if (!padreId) throw new MyraypaError(`Para añadir una ${tipo} indica a qué ${tipo === 'tarea' ? 'bloque' : 'tarea'} pertenece.`, 400);
+      const padre = this.#buscarNodo(r, padreId);
+      const esperado = tipo === 'tarea' ? 'bloque' : 'tarea';
+      if (!padre || padre.tipo !== esperado) throw new MyraypaError(`El elemento padre debe ser un${esperado === 'bloque' ? ' bloque' : 'a tarea'} del roadmap.`, 400);
+      padre.node.items.push(nuevo);
+    }
+    this.historial.push({ roadmapId, accion: 'anadir_elemento_roadmap', origin });
+    return { ok: true, ...this.#detalle(r) };
+  }
+
+  async addRoadmapMilestone(roadmapId, { titulo, fecha: f }, origin) {
+    const r = this.#roadmap(roadmapId);
+    this.#escribirRoadmap(r);
+    if (!fecha(f)) throw new MyraypaError('La fecha del hito es obligatoria.', 400);
+    r.hitos.push({ id: `h${this.#nextId++}`, titulo, fecha: f });
+    this.historial.push({ roadmapId, accion: 'anadir_hito_roadmap', origin });
+    return { ok: true, hitos: r.hitos.map((h) => ({ ...h })) };
+  }
+
+  async updateRoadmapMilestone(roadmapId, hitoId, cambios, origin) {
+    const r = this.#roadmap(roadmapId);
+    this.#escribirRoadmap(r);
+    const h = this.#hito(r.hitos, hitoId);
+    if (cambios.fecha !== undefined) h.fecha = fecha(cambios.fecha);
+    if (cambios.titulo !== undefined) h.titulo = cambios.titulo;
+    this.historial.push({ roadmapId, accion: 'actualizar_hito_roadmap', origin });
+    return { ok: true, hitos: r.hitos.map((x) => ({ ...x })) };
+  }
+
+  async listProjectMilestones(proyectoId) {
+    const p = this.#proyecto(proyectoId);
+    return { proyecto: p.nombre, hitos: (this.hitosProyecto[p.id] ?? []).map((h) => ({ ...h })) };
+  }
+
+  async addProjectMilestone(proyectoId, { titulo, fecha: f }, origin) {
+    const p = this.#proyecto(proyectoId);
+    this.#requiere(p, 'tickets');
+    if (!fecha(f)) throw new MyraypaError('La fecha del hito es obligatoria.', 400);
+    (this.hitosProyecto[p.id] ??= []).push({ id: `ph${this.#nextId++}`, titulo, fecha: f });
+    this.historial.push({ proyectoId, accion: 'anadir_hito_proyecto', origin });
+    return { ok: true, proyecto: p.nombre, hitos: this.hitosProyecto[p.id].map((h) => ({ ...h })) };
+  }
+
+  async updateProjectMilestone(proyectoId, hitoId, cambios, origin) {
+    const p = this.#proyecto(proyectoId);
+    this.#requiere(p, 'tickets');
+    const h = this.#hito(this.hitosProyecto[p.id] ?? [], hitoId);
+    if (cambios.fecha !== undefined) h.fecha = fecha(cambios.fecha);
+    if (cambios.titulo !== undefined) h.titulo = cambios.titulo;
+    this.historial.push({ proyectoId, accion: 'actualizar_hito_proyecto', origin });
+    return { ok: true, proyecto: p.nombre, hitos: this.hitosProyecto[p.id].map((x) => ({ ...x })) };
+  }
+
+  // ── Detalle ampliado, horas, etiquetas, checklist, campos, subtareas, participantes e informes ──
+  #escribe(tk) {
+    this.#requiere(this.#proyecto(tk.proyectoId), 'tickets');
+  }
+
+  #apuntado(tk) {
+    return Math.round(tk.horas.reduce((a, h) => a + h.horas, 0) * 100) / 100;
+  }
+
+  async getTicketFull(id) {
+    const tk = this.#ticket(id);
+    return {
+      ...this.#vista(tk),
+      descripcion: tk.descripcion,
+      ticketPadre: tk.parentId,
+      inicio: tk.inicio,
+      participantes: [...tk.participantes],
+      etiquetas: [...tk.etiquetas],
+      horas: { estimadas: tk.estimadoHoras, registradas: this.#apuntado(tk), apuntes: tk.horas.slice(-5) },
+      checklist: tk.checklist.map((c, i) => ({ id: c.id, n: i + 1, texto: c.texto, hecho: c.hecho })),
+      camposPersonalizados: (this.camposProyecto[tk.proyectoId] ?? []).map((d) => ({ ...d, valor: tk.campos[d.campo] ?? null })),
+      subtareas: this.tickets.filter((x) => x.parentId === tk.id).map((x) => this.#vista(x)),
+    };
+  }
+
+  async setTicketDates(id, cambios, origin) {
+    const tk = this.#ticket(id);
+    this.#escribe(tk);
+    const inicio = cambios.inicio !== undefined ? fecha(cambios.inicio, 'fecha de inicio') : tk.inicio;
+    const venc = cambios.vencimiento !== undefined ? fecha(cambios.vencimiento, 'fecha de vencimiento') : tk.vencimiento;
+    if (inicio && venc && venc < inicio) throw new MyraypaError('El vencimiento no puede ser anterior al inicio.', 400);
+    const est = cambios.estimadoHoras !== undefined ? (cambios.estimadoHoras ?? 0) : tk.estimadoHoras;
+    if (inicio === tk.inicio && venc === tk.vencimiento && est === tk.estimadoHoras) throw new MyraypaError('El ticket ya tiene esas fechas y estimación; no hay nada que cambiar.', 409);
+    Object.assign(tk, { inicio, vencimiento: venc, estimadoHoras: est });
+    this.historial.push({ ticketId: tk.id, accion: 'cambiar_fechas', origin });
+    return { ok: true, inicio, vencimiento: venc, estimadoHoras: est };
+  }
+
+  async logHours(id, { horas, nota = '', fecha: f, usuario }, origin) {
+    const tk = this.#ticket(id);
+    this.#escribe(tk);
+    if (!(horas > 0) || horas > 24) throw new MyraypaError('Las horas deben ser un número entre 0 y 24.', 400);
+    tk.horas.push({ horas, fecha: fecha(f) ?? '2026-10-22', usuario: usuario ?? 'asistente', nota });
+    this.historial.push({ ticketId: tk.id, accion: 'registrar_horas', origin });
+    return { ok: true, registradas: this.#apuntado(tk), estimadas: tk.estimadoHoras };
+  }
+
+  async listLabels(proyectoId) {
+    const p = this.#proyecto(proyectoId);
+    return { proyecto: p.nombre, etiquetas: [...(this.etiquetasProyecto[p.id] ?? [])] };
+  }
+
+  async changeLabels(id, { anadir = [], quitar = [] }, origin) {
+    const tk = this.#ticket(id);
+    this.#escribe(tk);
+    const validas = this.etiquetasProyecto[tk.proyectoId] ?? [];
+    const buscar = (n) => {
+      const e = validas.find((x) => norm(x) === norm(n));
+      if (!e) throw new MyraypaError(`No encuentro la etiqueta "${n}". Hay: ${validas.join(', ') || 'ninguna'}.`, 404);
+      return e;
+    };
+    const antes = tk.etiquetas.join('|');
+    for (const n of anadir) if (!tk.etiquetas.includes(buscar(n))) tk.etiquetas.push(buscar(n));
+    tk.etiquetas = tk.etiquetas.filter((e) => !quitar.map(buscar).includes(e));
+    if (tk.etiquetas.join('|') === antes) throw new MyraypaError('El ticket ya tiene esas etiquetas; no hay nada que cambiar.', 409);
+    this.historial.push({ ticketId: tk.id, accion: 'cambiar_etiquetas', origin });
+    return { ok: true, etiquetas: [...tk.etiquetas] };
+  }
+
+  async addChecklistItem(id, texto, origin) {
+    const tk = this.#ticket(id);
+    this.#escribe(tk);
+    tk.checklist.push({ id: `c${this.#nextId++}`, texto, hecho: false });
+    this.historial.push({ ticketId: tk.id, accion: 'anadir_checklist', origin });
+    return { ok: true, checklist: tk.checklist.map((c, i) => ({ id: c.id, n: i + 1, texto: c.texto, hecho: c.hecho })) };
+  }
+
+  async updateChecklistItem(id, itemId, cambios, origin) {
+    const tk = this.#ticket(id);
+    this.#escribe(tk);
+    const v = norm(itemId);
+    const item = tk.checklist.find((c) => c.id === itemId) ?? tk.checklist[Number(itemId) - 1] ?? tk.checklist.find((c) => norm(c.texto).includes(v));
+    if (!item) throw new MyraypaError('No encuentro ese elemento del checklist.', 404);
+    if ((cambios.completado === undefined || cambios.completado === item.hecho) && (cambios.texto === undefined || cambios.texto === item.texto)) {
+      throw new MyraypaError('Ese elemento ya está así; no hay nada que cambiar.', 409);
+    }
+    if (cambios.completado !== undefined) item.hecho = cambios.completado;
+    if (cambios.texto !== undefined) item.texto = cambios.texto;
+    this.historial.push({ ticketId: tk.id, accion: 'actualizar_checklist', origin });
+    return { ok: true, checklist: tk.checklist.map((c, i) => ({ id: c.id, n: i + 1, texto: c.texto, hecho: c.hecho })) };
+  }
+
+  async listCustomFields(proyectoId) {
+    const p = this.#proyecto(proyectoId);
+    return { proyecto: p.nombre, campos: (this.camposProyecto[p.id] ?? []).map((d) => ({ ...d, obligatorio: false })) };
+  }
+
+  async setCustomField(id, { campo, valor }, origin) {
+    const tk = this.#ticket(id);
+    this.#escribe(tk);
+    const def = (this.camposProyecto[tk.proyectoId] ?? []).find((d) => norm(d.campo) === norm(campo));
+    if (!def) throw new MyraypaError(`No encuentro el campo "${campo}".`, 404);
+    let v = valor;
+    if (v !== null && def.tipo === 'number') {
+      v = Number(String(v).replace(',', '.'));
+      if (!Number.isFinite(v)) throw new MyraypaError(`El campo ${def.campo} es numérico.`, 400);
+    } else if (v !== null && def.tipo === 'date') v = fecha(v, `fecha del campo ${def.campo}`);
+    else if (v !== null && def.tipo === 'select') {
+      const o = def.opciones.find((x) => norm(x) === norm(v));
+      if (!o) throw new MyraypaError(`El campo ${def.campo} solo admite: ${def.opciones.join(', ')}.`, 400);
+      v = o;
+    }
+    tk.campos[def.campo] = v;
+    this.historial.push({ ticketId: tk.id, accion: 'cambiar_campo', origin });
+    return { ok: true, campo: def.campo, valor: v };
+  }
+
+  async createSubtask(id, { titulo, prioridad = 'ninguna', asignado = '', vencimiento }, origin) {
+    const tk = this.#ticket(id);
+    this.#escribe(tk);
+    if (tk.parentId) throw new MyraypaError('Ese ticket ya es una subtarea; MyRAYPA solo admite un nivel.', 400);
+    const sub = {
+      ...tk, id: String(this.#nextTicket++), titulo, descripcion: '', prioridad: parsePrioridad(prioridad), asignado, completado: false, comentarios: [],
+      estadoId: 'todo', parentId: tk.id, vencimiento: fecha(vencimiento, 'fecha de vencimiento'), inicio: null, estimadoHoras: 0, horas: [], etiquetas: [], checklist: [], campos: {}, participantes: [],
+    };
+    this.tickets.push(sub);
+    this.historial.push({ ticketId: sub.id, accion: 'crear_subtarea', origin });
+    return this.#vista(sub);
+  }
+
+  async changeParticipants(id, { anadir = [], quitar = [] }, origin) {
+    const tk = this.#ticket(id);
+    this.#escribe(tk);
+    const miembros = this.miembrosProyecto[tk.proyectoId] ?? [];
+    const quien = (n) => {
+      const m = miembros.find((x) => norm(x) === norm(n));
+      if (!m) throw new MyraypaError(`No encuentro ningún usuario llamado "${n}".`, 400);
+      return m;
+    };
+    const antes = tk.participantes.join('|');
+    for (const n of anadir) if (!tk.participantes.includes(quien(n))) tk.participantes.push(quien(n));
+    tk.participantes = tk.participantes.filter((p) => !quitar.map(quien).includes(p));
+    if (tk.participantes.join('|') === antes) throw new MyraypaError('Esos participantes ya estaban así; no hay nada que cambiar.', 409);
+    this.historial.push({ ticketId: tk.id, accion: 'cambiar_participantes', origin });
+    return { ok: true, participantes: [...tk.participantes] };
+  }
+
+  async listMembers(proyectoId) {
+    const p = this.#proyecto(proyectoId);
+    return { proyecto: p.nombre, propietario: 'alex', miembros: [...(this.miembrosProyecto[p.id] ?? [])], equipos: [] };
+  }
+
+  async projectReport(proyectoId, { desde, hasta } = {}) {
+    const p = this.#proyecto(proyectoId);
+    fecha(desde, 'fecha "desde"');
+    fecha(hasta, 'fecha "hasta"');
+    const ts = this.tickets.filter((t) => t.proyectoId === p.id);
+    const abiertos = ts.filter((t) => !t.completado);
+    const venc = abiertos.filter((t) => t.vencimiento && t.vencimiento < '2026-10-22');
+    const porUsuario = {};
+    for (const t of ts) for (const h of t.horas) {
+      if ((desde && h.fecha < desde) || (hasta && h.fecha > hasta)) continue;
+      porUsuario[h.usuario] = (porUsuario[h.usuario] ?? 0) + h.horas;
+    }
+    return {
+      proyecto: p.nombre, periodo: { desde: desde ?? null, hasta: hasta ?? null }, totalTickets: ts.length, abiertos: abiertos.length, completados: ts.length - abiertos.length,
+      sinAsignar: abiertos.filter((t) => !t.asignado).length,
+      vencidos: { total: venc.length, mas_antiguos: venc.map((t) => ({ id: t.id, titulo: t.titulo, vencimiento: t.vencimiento, asignado: t.asignado || null })) },
+      horas: { total: Object.values(porUsuario).reduce((a, b) => a + b, 0), porUsuario },
+      desviaciones: ts.filter((t) => t.estimadoHoras > 0 && this.#apuntado(t) > t.estimadoHoras).map((t) => ({ id: t.id, titulo: t.titulo, estimadas: t.estimadoHoras, registradas: this.#apuntado(t) })),
+    };
+  }
+
+  async workload({ proyectoId } = {}) {
+    if (proyectoId) this.#proyecto(proyectoId);
+    const por = new Map();
+    for (const t of this.tickets.filter((x) => !x.completado && (!proyectoId || x.proyectoId === proyectoId))) {
+      const k = t.asignado || 'sin asignar';
+      const c = por.get(k) ?? { usuario: k, abiertos: 0, vencidos: 0, prioridadAlta: 0, horasEstimadas: 0 };
+      c.abiertos += 1;
+      if (t.vencimiento && t.vencimiento < '2026-10-22') c.vencidos += 1;
+      if (t.prioridad === 'alta') c.prioridadAlta += 1;
+      c.horasEstimadas += Math.max(t.estimadoHoras - this.#apuntado(t), 0);
+      por.set(k, c);
+    }
+    return { ambito: proyectoId ?? 'todos los proyectos habilitados', personas: [...por.values()].sort((a, b) => b.abiertos - a.abiertos) };
+  }
+
+  async hoursReport({ proyectoId, usuario, desde, hasta } = {}) {
+    if (proyectoId) this.#proyecto(proyectoId);
+    fecha(desde, 'fecha "desde"');
+    fecha(hasta, 'fecha "hasta"');
+    const porUsuario = {};
+    let total = 0;
+    for (const t of this.tickets.filter((x) => !proyectoId || x.proyectoId === proyectoId)) for (const h of t.horas) {
+      if ((desde && h.fecha < desde) || (hasta && h.fecha > hasta) || (usuario && norm(h.usuario) !== norm(usuario))) continue;
+      porUsuario[h.usuario] = (porUsuario[h.usuario] ?? 0) + h.horas;
+      total += h.horas;
+    }
+    return { periodo: { desde: desde ?? null, hasta: hasta ?? null }, total, porUsuario };
   }
 }
