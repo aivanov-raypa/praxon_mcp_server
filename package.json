@@ -1,0 +1,22 @@
+{
+  "name": "praxon-mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Orquestador de Praxon: asistente de voz para gestionar tickets de MyRAYPA y lanzar agentes, con confirmaciones y auditoria.",
+  "type": "module",
+  "engines": { "node": ">=22.9" },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "dev": "node --watch --env-file-if-exists=.env src/index.js",
+    "mock": "node --env-file-if-exists=.env mock/server.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.1.0",
+    "ws": "^8.18.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.0"
+  }
+}
