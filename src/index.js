@@ -23,8 +23,10 @@ for (const list of Object.values(networkInterfaces())) {
   for (const i of list ?? []) if (i.family === 'IPv4' && !i.internal) console.log(`  ws://${i.address}:${port}/ws`);
 }
 const pairUrls = pairingUrls(config, port);
-if (pairUrls.length) {
-  console.log(`\nEmparejar la app: escanea este código (o abre http://localhost:${port}/pair en este equipo).`);
+if (!config.ALLOW_LEGACY_TOKEN) {
+  console.log('\nToken compartido desactivado. Empareja los móviles desde MyRAYPA: Configuración > Asistente de voz > Dispositivos.');
+} else if (pairUrls.length) {
+  console.log(`\nEmparejar la app (solo desarrollo; en producción usa MyRAYPA > Configuración > Asistente de voz): escanea este código (o abre http://localhost:${port}/pair en este equipo).`);
   console.log(await qrTerminal(pairingUri({ url: pairUrls[0], token: config.PRAXON_TOKEN, name: config.ASSISTANT_NAME })));
   console.log('El código contiene el acceso al asistente: no lo compartas.');
 }

@@ -42,6 +42,34 @@ function rango(inicio, fin) {
 }
 
 export class FakeMyraypa {
+  /** Emparejamiento simulado: códigos de un solo uso y dispositivos en memoria. */
+  pairingCodes = new Map(); // código -> email
+  devices = new Map(); // token -> { deviceId, email, username, name, revoked }
+  #deviceSeq = 0;
+
+  issuePairingCode(email = 'alex@raypa.com', code = 'ABCD2345') {
+    this.pairingCodes.set(code, email);
+    return code;
+  }
+  async redeemDevice(code, deviceName) {
+    const norm = String(code ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const email = this.pairingCodes.get(norm);
+    if (!email) throw new MyraypaError('El código no existe, ya se usó o ha caducado.', 401);
+    this.pairingCodes.delete(norm);
+    const deviceId = `dev${++this.#deviceSeq}`;
+    const token = `pxd_fake_${deviceId}_${'x'.repeat(24)}`;
+    this.devices.set(token, { deviceId, email, username: email.split('@')[0], name: deviceName || 'Dispositivo', revoked: false });
+    return { token, deviceId, name: deviceName || 'Dispositivo' };
+  }
+  async verifyDevice(token) {
+    const d = this.devices.get(token);
+    return d && !d.revoked ? { ok: true, deviceId: d.deviceId, email: d.email, username: d.username } : { ok: false };
+  }
+  revokeDevice(token) {
+    const d = this.devices.get(token);
+    if (d) d.revoked = true;
+  }
+
   constructor() {
     this.proyectos = [
       { id: 'calibraciones', nombre: 'Calibraciones', autonomia: 'agentes', repo: 'ejemplo/raypa-platform', ramaBase: 'main', estados: ESTADOS },

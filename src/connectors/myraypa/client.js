@@ -1,4 +1,5 @@
 import { MyraypaError } from './errors.js';
+import { currentUserEmail } from '../../identity.js';
 
 /**
  * Cliente de la API HTTP de MyRAYPA. El asistente habla con MyRAYPA SOLO por esta API, con una credencial
@@ -40,6 +41,8 @@ export const ROUTES = {
   projectReport: (id) => `/assistant/projects/${id}/informe`,
   workload: () => '/assistant/informes/carga',
   hoursReport: () => '/assistant/informes/horas',
+  deviceRedeem: () => '/assistant/devices/redeem',
+  deviceVerify: () => '/assistant/devices/verify',
 };
 
 export class HttpMyraypaClient {
@@ -59,10 +62,16 @@ export class HttpMyraypaClient {
     const url = new URL(this.#baseUrl + path);
     for (const [k, v] of Object.entries(query ?? {})) if (v !== undefined && v !== '') url.searchParams.set(k, String(v));
     let res;
+    const actingAs = currentUserEmail();
     try {
       res = await this.#fetch(url, {
         method,
-        headers: { Authorization: `Bearer ${this.#token}`, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+        headers: {
+          Authorization: `Bearer ${this.#token}`,
+          Accept: 'application/json',
+          ...(actingAs ? { 'X-Assistant-User': actingAs } : {}),
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+        },
         body: body ? JSON.stringify(body) : undefined,
         signal: AbortSignal.timeout(this.#timeoutMs),
       });
@@ -77,6 +86,14 @@ export class HttpMyraypaClient {
     return res.status === 204 ? null : res.json();
   }
 
+  /** Canjea un código de emparejamiento: { token, deviceId, name }. Lanza MyraypaError (400/401) si no es válido. */
+  redeemDevice(code, deviceName) {
+    return this.#request('POST', ROUTES.deviceRedeem(), { body: { code, deviceName } });
+  }
+  /** Comprueba un token de dispositivo: { ok, email, username, deviceId } o { ok:false }. */
+  verifyDevice(token) {
+    return this.#request('POST', ROUTES.deviceVerify(), { body: { token } });
+  }
   listProjects() {
     return this.#request('GET', ROUTES.projects());
   }

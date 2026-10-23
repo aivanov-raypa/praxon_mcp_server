@@ -1,25 +1,79 @@
 import { createServer as createHttpServer } from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { clientMessage } from './protocol.js';
 import { SessionStore } from './session.js';
 import { isLoopback, pairPage } from './pairing.js';
+import { DeviceAuth, RateLimiter } from './auth.js';
+import { runAsUser } from './identity.js';
 
 const SESSION_MAX_IDLE_MS = 12 * 60 * 60 * 1000;
 
-function tokenOk(header, token) {
-  const a = Buffer.from(String(header ?? ''));
-  const b = Buffer.from(`Bearer ${token}`);
-  return a.length === b.length && timingSafeEqual(a, b); // tiempo constante
+const REVERIFY_MS = 60_000;
+
+/** Lee un cuerpo JSON pequeño (máx. 2 KB). */
+function readJson(req, max = 2048) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > max) {
+        reject(new Error('demasiado grande'));
+        req.destroy();
+      } else chunks.push(c);
+    });
+    req.on('end', () => {
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'));
+      } catch (err) {
+        reject(err);
+      }
+    });
+    req.on('error', reject);
+  });
 }
 
 /**
  * Servidor WebSocket (/ws) + /health. La autenticacion se hace en el handshake (HTTP 401):
  * sin token valido no se llega a abrir el WebSocket.
  */
-export function createServer({ config, orchestrator, audit, triage = null, sessions = new SessionStore() }) {
+export function createServer({
+  config,
+  orchestrator,
+  audit,
+  triage = null,
+  sessions = new SessionStore(),
+  myraypa = null,
+  auth = new DeviceAuth({ config, myraypa }),
+  redeemLimiter = new RateLimiter(),
+}) {
+  const sendJson = (res, status, body) => res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify(body));
+
+  /** POST /pair/redeem { code, deviceName }: canjea el código del QR de MyRAYPA por el token del dispositivo. */
+  async function redeem(req, res) {
+    if (!redeemLimiter.take(req.socket.remoteAddress ?? '?')) return sendJson(res, 429, { message: 'Demasiados intentos. Espera unos minutos.' });
+    let body;
+    try {
+      body = await readJson(req);
+    } catch {
+      return sendJson(res, 400, { message: 'Petición no válida.' });
+    }
+    try {
+      const out = await myraypa.redeemDevice(String(body.code ?? ''), String(body.deviceName ?? '').slice(0, 80));
+      log({ event: 'device_paired', deviceId: out.deviceId, name: out.name, remote: req.socket.remoteAddress });
+      return sendJson(res, 200, { token: out.token, deviceId: out.deviceId, name: config.ASSISTANT_NAME });
+    } catch (err) {
+      const status = err.status === 400 || err.status === 401 ? err.status : 502;
+      if (status === 502) console.error('[emparejar]', err.message);
+      log({ event: 'device_pair_failed', status, remote: req.socket.remoteAddress });
+      return sendJson(res, status, { message: status === 502 ? 'No he podido contactar con MyRAYPA.' : 'El código no es válido o ha caducado.' });
+    }
+  }
+
   const http = createHttpServer((req, res) => {
-    if (req.url === '/health') {
+    if (req.method === 'POST' && req.url === '/pair/redeem' && myraypa) {
+      redeem(req, res).catch(() => res.headersSent || sendJson(res, 500, { message: 'Error interno.' }));
+    } else if (req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"status":"ok"}');
     } else if (req.url === '/pair' && isLoopback(req.socket.remoteAddress) && !req.headers['x-forwarded-for']) {
       // Solo desde el propio equipo del servidor: la página contiene el token.
@@ -35,7 +89,18 @@ export function createServer({ config, orchestrator, audit, triage = null, sessi
     server: http,
     path: '/ws',
     maxPayload: 16 * 1024,
-    verifyClient: (info, done) => done(tokenOk(info.req.headers.authorization, config.PRAXON_TOKEN), 401, 'Unauthorized'),
+    verifyClient: (info, done) => {
+      auth
+        .authenticate(info.req.headers.authorization)
+        .then((identity) => {
+          info.req.praxonIdentity = identity;
+          done(Boolean(identity), 401, 'Unauthorized');
+        })
+        .catch((err) => {
+          console.error('[auth]', err.message);
+          done(false, 503, 'Auth unavailable');
+        });
+    },
   });
 
   const broadcast = (msg) => {
@@ -74,7 +139,9 @@ export function createServer({ config, orchestrator, audit, triage = null, sessi
     const emit = (msg) => {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
     };
-    log({ event: 'connection_open', user: config.PRAXON_USER, remote: req.socket.remoteAddress });
+    const identity = req.praxonIdentity;
+    ws.identity = identity;
+    log({ event: 'connection_open', user: identity.user, deviceId: identity.deviceId, remote: req.socket.remoteAddress });
 
     ws.on('message', (raw) => {
       let msg;
@@ -91,14 +158,17 @@ export function createServer({ config, orchestrator, audit, triage = null, sessi
         });
         return;
       }
-      const session = sessions.get(msg.sessionId, config.PRAXON_USER);
+      const session = sessions.get(msg.sessionId, identity.user, identity.key, identity.email);
       session.connection = ws;
       bound.add(session);
 
       let work;
-      if (msg.type === 'user_text') work = orchestrator.handleUserText(session, msg, emit);
-      else if (msg.type === 'confirm') work = orchestrator.handleConfirm(session, msg, emit);
-      else work = orchestrator.cancel(session, emit);
+      // Todo lo que haga este mensaje contra MyRAYPA se hace como el usuario del dispositivo.
+      work = runAsUser(identity.email, () => {
+        if (msg.type === 'user_text') return orchestrator.handleUserText(session, msg, emit);
+        if (msg.type === 'confirm') return orchestrator.handleConfirm(session, msg, emit);
+        return orchestrator.cancel(session, emit);
+      });
       work.catch((err) => {
         console.error('[error]', err);
         log({ event: 'internal_error', sessionId: session.id, message: err.message });
@@ -114,7 +184,7 @@ export function createServer({ config, orchestrator, audit, triage = null, sessi
         orchestrator.abortTurn(session);
         orchestrator.dropPending(session, 'connection_closed');
       }
-      log({ event: 'connection_close', user: config.PRAXON_USER });
+      log({ event: 'connection_close', user: identity.user, deviceId: identity.deviceId });
     });
   });
 
@@ -129,6 +199,16 @@ export function createServer({ config, orchestrator, audit, triage = null, sessi
       }
     }, 30_000),
     setInterval(() => sessions.sweep(SESSION_MAX_IDLE_MS), 10 * 60 * 1000),
+    // Un dispositivo revocado en MyRAYPA pierde la conexión en cuanto se detecta.
+    setInterval(() => {
+      for (const ws of wss.clients) {
+        if (ws.identity?.kind !== 'device') continue;
+        auth
+          .verify(ws.identity.token, { fresh: true })
+          .then((id) => id || (log({ event: 'device_revoked', deviceId: ws.identity.deviceId }), ws.close(4401, 'revoked')))
+          .catch(() => {}); // si MyRAYPA no responde se mantiene la conexión y se reintenta
+      }
+    }, REVERIFY_MS),
   ];
   timers.forEach((t) => t.unref());
 

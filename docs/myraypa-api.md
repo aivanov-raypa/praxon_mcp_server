@@ -99,3 +99,28 @@ Escrituras: autonomía `tickets` o superior; todo queda en el `activityLog` con 
 | GET | `/assistant/informes/horas?proyecto=&usuario=&desde=&hasta=` | Horas por persona y proyecto |
 
 Las horas se atribuyen a `usuario` si se indica; si no, al usuario técnico del asistente (con la nota "apuntado por el asistente").
+
+## Habilitar proyectos para el asistente
+
+- **En bloque:** MyRAYPA › Configuración › Asistente de voz (solo administradores). Tabla con todos los proyectos activos:
+  habilitar, nivel de autonomía y repositorio de los agentes, con acciones sobre varios proyectos a la vez
+  (`GET /api/assistant-admin/overview` y `PUT /api/assistant-admin/projects`, sesión de administrador).
+- **Por proyecto:** pestaña Asistente de los ajustes del proyecto (también la rama base y el entorno de pruebas).
+- **Por consola:** `node --env-file=.env scripts/assistant-enable-project.js --list` en el backend.
+
+
+## Emparejamiento de móviles y usuario por dispositivo
+
+Los móviles se emparejan desde MyRAYPA (Configuración > Asistente de voz > Dispositivos, solo administradores):
+
+1. El administrador pulsa "Emparejar un móvil": MyRAYPA genera un código de 8 caracteres de un solo uso (caduca a los 5 minutos, se guarda su hash) y lo muestra como QR `praxon://pair?v=2&u=<wss://…/ws>&c=<código>`.
+2. La app escanea el QR y hace `POST <servidor Praxon>/pair/redeem {code, deviceName}` (límite de 10 intentos por IP cada 10 minutos). El servidor Praxon lo canjea en MyRAYPA con su credencial de servicio y devuelve a la app un token propio (`pxd_…`). MyRAYPA solo guarda su hash.
+3. En cada conexión el servidor Praxon verifica el token en MyRAYPA (`POST /api/assistant/devices/verify`, caché de 60 s) y actúa como el usuario del dispositivo: las llamadas a la API llevan `X-Assistant-User: <email>`. MyRAYPA solo lo acepta si ese usuario tiene un dispositivo activo.
+4. Revocar un dispositivo en MyRAYPA corta su conexión en menos de un minuto.
+
+Variables de entorno:
+
+- MyRAYPA: `ASSISTANT_PUBLIC_URL` (dirección pública del servidor Praxon, `wss://praxon.ejemplo.com/ws`; si falta, la página pide escribirla).
+- Praxon: `ALLOW_LEGACY_TOKEN` (por defecto `true`; el `PRAXON_TOKEN` compartido y el QR de la consola son solo para desarrollo. En producción, `false`).
+
+Limitaciones conocidas: las propuestas de la revisión automática se calculan y se ejecutan como el usuario de servicio (`ASSISTANT_USER_EMAIL`), no por usuario; cualquier móvil emparejado las ve y puede aprobarlas. El emparejamiento está limitado a administradores porque la autorización del asistente es por proyecto habilitado, no por pertenencia al proyecto.

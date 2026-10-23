@@ -27,11 +27,14 @@ export class Session {
 export class SessionStore {
   #sessions = new Map();
 
-  get(id, user) {
-    let s = this.#sessions.get(id);
+  /** `owner` separa las conversaciones de cada dispositivo aunque coincida el sessionId. */
+  get(id, user, owner = user, email = null) {
+    const key = `${owner}\u0000${id}`;
+    let s = this.#sessions.get(key);
     if (!s) {
       s = new Session(id, user);
-      this.#sessions.set(id, s);
+      s.email = email;
+      this.#sessions.set(key, s);
     }
     s.lastSeen = Date.now();
     return s;
@@ -40,9 +43,9 @@ export class SessionStore {
   /** Elimina las sesiones sin actividad. Devuelve cuantas ha borrado. */
   sweep(maxIdleMs, now = Date.now()) {
     let n = 0;
-    for (const [id, s] of this.#sessions) {
+    for (const [key, s] of this.#sessions) {
       if (now - s.lastSeen > maxIdleMs && !s.connection) {
-        this.#sessions.delete(id);
+        this.#sessions.delete(key);
         n++;
       }
     }

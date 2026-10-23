@@ -5,6 +5,8 @@ const schema = z
     PORT: z.coerce.number().int().min(0).max(65535).default(8080),
     HOST: z.string().default('0.0.0.0'),
     PRAXON_TOKEN: z.string().min(12, 'PRAXON_TOKEN debe tener al menos 12 caracteres'),
+    // Token compartido de desarrollo. En producción, empareja los móviles desde MyRAYPA y pon ALLOW_LEGACY_TOKEN=false.
+    ALLOW_LEGACY_TOKEN: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
     PRAXON_USER: z.string().min(1).default('desconocido'),
     PRAXON_PUBLIC_URL: z.string().regex(/^wss?:\/\/.+/, 'debe empezar por ws:// o wss://').optional(),
     ASSISTANT_NAME: z.string().min(1).default('Praxon'),

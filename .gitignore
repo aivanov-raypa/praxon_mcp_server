@@ -6,3 +6,4 @@ logs/
 .vscode/
 coverage/
 .sf/data/
+.sf/
