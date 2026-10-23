@@ -27,6 +27,25 @@ const INTERNAL_TOOLS = [
   },
 ];
 
+/** Solo se ofrece si existe la herramienta de lanzar agentes. No lanza nada: deja constancia del tipo y del motivo. */
+const SUGGEST_TOOL = {
+  name: 'sugerir_agente',
+  description:
+    'Indica que un agente de desarrollo podría trabajar este ticket y de qué tipo es (mejora = nueva funcionalidad; error = corregir un fallo). NO lo lanza: el usuario lo verá como una opción desmarcada dentro de la propuesta de ese ticket.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      ticketId: { type: 'string' },
+      tipo: { type: 'string', enum: ['mejora', 'error'] },
+      motivo: { type: 'string', description: 'Por qué un agente podría resolverlo, en una frase' },
+    },
+    required: ['ticketId', 'tipo', 'motivo'],
+  },
+};
+const AGENT_TOOL = 'myraypa_lanzar_agente';
+const suggestInput = z.object({ ticketId: z.string().min(1), tipo: z.enum(['mejora', 'error']), motivo: z.string().trim().min(3).max(300) });
+const grupoDe = (a) => a.grupo ?? `s-${a.id}`;
+
 const proposeInput = z.object({
   herramienta: z.string().min(1),
   parametros: z.record(z.string(), z.unknown()).default({}),
@@ -90,7 +109,9 @@ export class Triage {
       const maxCode = this.#config.TRIAGE_CODE_MAX_CALLS ?? 12;
       const code = maxCode > 0 && this.#registry.list().some((t) => t.connector === 'github');
       const offered = (t) => reads(t) && (code || t.connector !== 'github');
-      const tools = [...this.#registry.forModel(offered), ...INTERNAL_TOOLS];
+      const canAgent = Boolean(this.#registry.get(AGENT_TOOL));
+      const tools = [...this.#registry.forModel(offered), ...INTERNAL_TOOLS, ...(canAgent ? [SUGGEST_TOOL] : [])];
+      const sugerencias = new Map();
       let codeCalls = 0;
       const messages = [{ role: 'user', content: focus ? 'Revisa ahora los tickets nuevos indicados.' : 'Haz la revisión ahora.' }];
       const session = { id: `revision-${id}`, user };
@@ -125,6 +146,12 @@ export class Triage {
               finished = true;
               results.push(result(tu.id, { ok: true }));
             } else results.push(result(tu.id, 'Falta el resumen.', true));
+          } else if (tu.name === 'sugerir_agente' && canAgent) {
+            const p = suggestInput.safeParse(tu.input ?? {});
+            if (p.success) {
+              sugerencias.set(p.data.ticketId, { tipo: p.data.tipo, motivo: p.data.motivo });
+              results.push(result(tu.id, { ok: true }));
+            } else results.push(result(tu.id, 'Faltan datos: ticketId, tipo (mejora o error) y motivo.', true));
           } else if (tu.name === 'proponer_accion') {
             results.push(result(tu.id, ...(await this.#propose(tu.input, acciones, session))));
           } else {
@@ -153,6 +180,7 @@ export class Triage {
         messages.push({ role: 'user', content: results });
       }
 
+      await this.#agrupar(acciones, sugerencias, session, user);
       const briefing = { id, createdAt: new Date(started).toISOString(), trigger, resumen, acciones };
       // En la revisión de tickets nuevos solo se guarda si hay algo que aprobar: así no se llena la bandeja de avisos vacíos.
       if (focus ? acciones.length : resumen || acciones.length) await this.#store.add(briefing);
@@ -193,8 +221,114 @@ export class Triage {
     const key = `${herramienta}|${stableArgs(parsed.data)}`;
     const repetida = [...this.#store.pending().map((x) => x.action), ...acciones].some((a) => a.herramienta === herramienta && stableArgs(a.args) === stableArgs(parsed.data));
     if (repetida) return ['Esa acción ya está propuesta y pendiente. No la repitas.', true];
-    acciones.push({ id: randomUUID(), herramienta, args: parsed.data, resumen, motivo, estado: 'pendiente', key });
+    const ticketId = parsed.data.ticketId != null ? String(parsed.data.ticketId) : null;
+    acciones.push({ id: randomUUID(), herramienta, args: parsed.data, resumen, motivo, estado: 'pendiente', key, ticketId });
     return [{ ok: true, propuesta: resumen }, false];
+  }
+
+  /**
+   * Una propuesta por ticket: reune las acciones de cada ticket en un grupo (lo que el usuario ve como una sola propuesta)
+   * y, si el proyecto lo permite, añade la opción de lanzar un agente de desarrollo. Esa opción nace desmarcada y solo la
+   * crea el servidor: el modelo no puede proponer agentes.
+   */
+  async #agrupar(acciones, sugerencias, session, user) {
+    const detalle = this.#registry.get('myraypa_detalle_ticket');
+    const lanzar = this.#registry.get(AGENT_TOOL);
+    const ids = [];
+    for (const a of acciones) if (a.ticketId && !ids.includes(a.ticketId)) ids.push(a.ticketId);
+    for (const id of sugerencias.keys()) if (!ids.includes(id)) ids.push(id);
+    const titulos = new Map();
+    for (const id of ids) {
+      let titulo = null;
+      try {
+        titulo = (await detalle?.execute({ ticketId: id }, { session, user }))?.titulo ?? null;
+      } catch {
+        /* sin título: la app mostrará el ticket por su id */
+      }
+      titulos.set(id, titulo);
+    }
+    for (const a of acciones) {
+      if (a.ticketId) Object.assign(a, { ticket: titulos.get(a.ticketId), grupo: `g-${a.ticketId}` });
+      else a.grupo = `s-${a.id}`;
+    }
+    if (!lanzar) return;
+    for (const id of ids) {
+      const sug = sugerencias.get(id);
+      const parsed = lanzar.input.safeParse({ ticketId: id, tipo: sug?.tipo ?? 'mejora' });
+      if (!parsed.success) continue;
+      const repetida = [...this.#store.pending().map((x) => x.action), ...acciones].some((a) => a.herramienta === AGENT_TOOL && stableArgs(a.args) === stableArgs(parsed.data));
+      if (repetida) continue;
+      let resumen;
+      try {
+        resumen = await lanzar.summarize(parsed.data, { session, user });
+      } catch {
+        continue; // el proyecto no permite agentes o no tiene repositorio: no se ofrece
+      }
+      acciones.push({
+        id: randomUUID(),
+        herramienta: AGENT_TOOL,
+        args: parsed.data,
+        resumen,
+        motivo: sug?.motivo ?? 'Que un agente de desarrollo lo trabaje y abra un pull request para tu revisión.',
+        estado: 'pendiente',
+        key: `${AGENT_TOOL}|${stableArgs(parsed.data)}`,
+        ticketId: id,
+        ticket: titulos.get(id),
+        grupo: `g-${id}`,
+        opcional: true,
+        origen: 'servidor',
+      });
+    }
+  }
+
+  #permitida(action) {
+    const tool = this.#registry.get(action.herramienta);
+    if (!tool || tool.risk !== 'write') return false;
+    return action.origen === 'servidor' || this.#allowed().has(action.herramienta);
+  }
+
+  async #settle(briefing, action, estado, mensaje, user) {
+    Object.assign(action, { estado, mensaje, decididaEn: new Date(this.#now()).toISOString() });
+    await this.#store.save();
+    await this.#log({ event: 'proposal_decision', user, briefingId: briefing.id, actionId: action.id, tool: action.herramienta, estado });
+    return { ok: estado === 'ejecutada' || estado === 'descartada', estado, mensaje };
+  }
+
+  /** Comprobaciones previas a ejecutar. Devuelve { fail } (ya resuelta) o lo necesario para ejecutar. */
+  async #prepare(briefing, action, user) {
+    const ageMs = this.#now() - Date.parse(briefing.createdAt);
+    if (ageMs > this.#config.PROPOSAL_TTL_HOURS * 3_600_000) return { fail: await this.#settle(briefing, action, 'caducada', 'La propuesta ha caducado. Pide una revisión nueva.', user) };
+    const tool = this.#registry.get(action.herramienta);
+    if (!tool || !this.#permitida(action)) return { fail: await this.#settle(briefing, action, 'fallida', 'Esa acción ya no está permitida.', user) };
+    const parsed = tool.input.safeParse(action.args);
+    if (!parsed.success) return { fail: await this.#settle(briefing, action, 'fallida', 'Los datos de la propuesta ya no son válidos.', user) };
+    const session = { id: `propuesta-${briefing.id}`, user };
+    // Comprobacion de que nada ha cambiado: el resumen se calcula con los datos de ahora y debe coincidir con el aprobado.
+    let fresh;
+    try {
+      fresh = await tool.summarize(parsed.data, { session, user });
+    } catch (err) {
+      return { fail: await this.#settle(briefing, action, 'obsoleta', `Ha cambiado desde la propuesta: ${err.message}`, user) };
+    }
+    if (fresh !== action.resumen) return { fail: await this.#settle(briefing, action, 'obsoleta', `Ha cambiado desde la propuesta. Ahora sería: ${fresh}`, user) };
+    return { tool, parsed, session };
+  }
+
+  async #execute(briefing, action, { tool, parsed, session }, user) {
+    const base = { sessionId: session.id, user, tool: tool.name, risk: 'write', args: parsed.data, via: 'proposal', briefingId: briefing.id, actionId: action.id, ...(action.grupo && { grupo: action.grupo }) };
+    try {
+      await this.#audit.record({ event: 'tool_call_start', ...base });
+    } catch {
+      return { ok: false, estado: 'pendiente', mensaje: 'No se ha podido registrar la auditoría, así que no se ha ejecutado.' };
+    }
+    try {
+      await tool.execute(parsed.data, { session, user });
+      await this.#log({ event: 'tool_call', ...base, ok: true });
+      return this.#settle(briefing, action, 'ejecutada', 'Hecho.', user);
+    } catch (err) {
+      await this.#log({ event: 'tool_call', ...base, ok: false, error: err.message });
+      return this.#settle(briefing, action, 'fallida', `No se ha podido ejecutar: ${err.message}`, user);
+    }
   }
 
   /** El usuario aprueba o descarta una accion. */
@@ -203,61 +337,88 @@ export class Triage {
     const action = briefing?.acciones.find((a) => a.id === actionId);
     if (!action) return { ok: false, mensaje: 'No existe esa propuesta.' };
     if (action.estado !== 'pendiente' || this.#busy.has(actionId)) return { ok: false, estado: action.estado, mensaje: 'Esa propuesta ya se ha resuelto.' };
-    const finish = async (estado, mensaje, extra = {}) => {
-      Object.assign(action, { estado, mensaje, decididaEn: new Date(this.#now()).toISOString() }, extra);
-      await this.#store.save();
-      await this.#log({ event: 'proposal_decision', user, briefingId, actionId, tool: action.herramienta, estado });
-      return { ok: estado === 'ejecutada' || estado === 'descartada', estado, mensaje };
-    };
-
     const ageMs = this.#now() - Date.parse(briefing.createdAt);
-    if (ageMs > this.#config.PROPOSAL_TTL_HOURS * 3_600_000) return finish('caducada', 'La propuesta ha caducado. Pide una revisión nueva.');
-    if (!accepted) return finish('descartada', 'Descartada.');
+    if (ageMs > this.#config.PROPOSAL_TTL_HOURS * 3_600_000) return this.#settle(briefing, action, 'caducada', 'La propuesta ha caducado. Pide una revisión nueva.', user);
+    if (!accepted) return this.#settle(briefing, action, 'descartada', 'Descartada.', user);
 
     this.#busy.add(actionId);
     try {
-      const tool = this.#registry.get(action.herramienta);
-      if (!tool || tool.risk !== 'write' || !this.#allowed().has(action.herramienta)) return finish('fallida', 'Esa acción ya no está permitida.');
-      const parsed = tool.input.safeParse(action.args);
-      if (!parsed.success) return finish('fallida', 'Los datos de la propuesta ya no son válidos.');
-      const session = { id: `propuesta-${briefingId}`, user };
-      // Comprobacion de que nada ha cambiado: el resumen se calcula con los datos de ahora y debe coincidir con el aprobado.
-      let fresh;
-      try {
-        fresh = await tool.summarize(parsed.data, { session, user });
-      } catch (err) {
-        return finish('obsoleta', `Ha cambiado desde la propuesta: ${err.message}`);
-      }
-      if (fresh !== action.resumen) return finish('obsoleta', `Ha cambiado desde la propuesta. Ahora sería: ${fresh}`);
-
-      const base = { sessionId: session.id, user, tool: tool.name, risk: 'write', args: parsed.data, via: 'proposal', briefingId, actionId };
-      try {
-        await this.#audit.record({ event: 'tool_call_start', ...base });
-      } catch {
-        return { ok: false, estado: 'pendiente', mensaje: 'No se ha podido registrar la auditoría, así que no se ha ejecutado.' };
-      }
-      try {
-        await tool.execute(parsed.data, { session, user });
-        await this.#log({ event: 'tool_call', ...base, ok: true });
-        return finish('ejecutada', 'Hecho.');
-      } catch (err) {
-        await this.#log({ event: 'tool_call', ...base, ok: false, error: err.message });
-        return finish('fallida', `No se ha podido ejecutar: ${err.message}`);
-      }
+      const prep = await this.#prepare(briefing, action, user);
+      if (prep.fail) return prep.fail;
+      return await this.#execute(briefing, action, prep, user);
     } finally {
       this.#busy.delete(actionId);
     }
   }
 
-  /** Vista para la app: sin los parametros internos de las acciones. */
+  /**
+   * El usuario resuelve la propuesta de un ticket entera: `aprobar` son las acciones que marcó; el resto del grupo se
+   * descarta. Primero se comprueba que todas las marcadas siguen vigentes y después se ejecutan, los cambios antes que el
+   * agente. Si un cambio falla o está obsoleto, el agente no se lanza y su opción sigue pendiente.
+   */
+  async decideGroup({ briefingId, grupo, aprobar = [], user }) {
+    const briefing = this.#store.get(briefingId);
+    const miembros = briefing?.acciones.filter((a) => grupoDe(a) === grupo) ?? [];
+    if (!miembros.length) return { ok: false, mensaje: 'No existe esa propuesta.', resultados: [] };
+    const pendientes = miembros.filter((a) => a.estado === 'pendiente');
+    if (!pendientes.length) return { ok: false, mensaje: 'Esa propuesta ya se ha resuelto.', resultados: [] };
+    if (pendientes.some((a) => this.#busy.has(a.id))) return { ok: false, mensaje: 'Esa propuesta se está procesando.', resultados: [] };
+
+    const elegidas = pendientes.filter((a) => aprobar.includes(a.id));
+    const resultados = [];
+    for (const a of pendientes.filter((x) => !elegidas.includes(x))) resultados.push({ actionId: a.id, ...(await this.#settle(briefing, a, 'descartada', 'No seleccionada.', user)) });
+    for (const a of elegidas) this.#busy.add(a.id);
+    try {
+      const orden = [...elegidas.filter((a) => !a.opcional), ...elegidas.filter((a) => a.opcional)];
+      const listas = [];
+      let fallo = false;
+      for (const a of orden) {
+        const prep = await this.#prepare(briefing, a, user);
+        if (prep.fail) {
+          resultados.push({ actionId: a.id, ...prep.fail });
+          if (!a.opcional) fallo = true;
+        } else listas.push({ a, prep });
+      }
+      for (const { a, prep } of listas) {
+        if (a.opcional && fallo) {
+          resultados.push({ actionId: a.id, ok: false, estado: 'pendiente', mensaje: 'No se ha lanzado el agente porque falló un cambio anterior.' });
+          continue;
+        }
+        const r = await this.#execute(briefing, a, prep, user);
+        resultados.push({ actionId: a.id, ...r });
+        if (!r.ok && !a.opcional) fallo = true;
+      }
+    } finally {
+      for (const a of elegidas) this.#busy.delete(a.id);
+    }
+    const hechas = resultados.filter((r) => r.estado === 'ejecutada').length;
+    const mal = resultados.find((r) => !r.ok);
+    const mensaje = !elegidas.length ? 'Propuesta descartada.' : mal ? `${hechas} de ${elegidas.length} acciones hechas. ${mal.mensaje}` : hechas === 1 ? 'Hecho.' : `Hecho: ${hechas} acciones.`;
+    return { ok: !mal, mensaje, resultados };
+  }
+
+  /** Vista para la app: sin los parametros internos de las acciones. `pendientes` cuenta propuestas (una por ticket). */
   view({ limit = 10 } = {}) {
     const briefings = this.#store.list().slice(0, limit).map((b) => ({
       id: b.id,
       createdAt: b.createdAt,
       trigger: b.trigger,
       resumen: b.resumen,
-      acciones: b.acciones.map(({ id, herramienta, resumen, motivo, estado, mensaje }) => ({ id, herramienta, resumen, motivo, estado, mensaje })),
+      acciones: b.acciones.map((a) => ({
+        id: a.id,
+        herramienta: a.herramienta,
+        resumen: a.resumen,
+        motivo: a.motivo,
+        estado: a.estado,
+        mensaje: a.mensaje,
+        ticketId: a.ticketId ?? null,
+        ticket: a.ticket ?? null,
+        grupo: grupoDe(a),
+        opcional: Boolean(a.opcional),
+        defecto: !a.opcional,
+      })),
     }));
-    return { type: 'proposals', pendientes: this.#store.pending().length, running: this.#running, briefings };
+    const pendientes = new Set(this.#store.pending().map(({ briefing, action }) => `${briefing.id}|${grupoDe(action)}`)).size;
+    return { type: 'proposals', pendientes, running: this.#running, briefings };
   }
 }

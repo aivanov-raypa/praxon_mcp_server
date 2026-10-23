@@ -9,6 +9,23 @@
 export const branchOf = (run) => `praxon/ticket-${run.ticketId}-${run.runId}`;
 
 const ABIERTOS = ['en_cola', 'en_curso', 'bloqueado', 'pendiente_revision'];
+const HISTORICOS = ['completado', 'fallido'];
+/** Resumen del agente sin las líneas que añade el workflow, en una sola línea y recortado en un límite de frase. */
+export function breveResumen(texto, max = 260) {
+  const limpio = String(texto ?? '')
+    .split('\n')
+    .filter((l) => !/^(Ticket MyRAYPA:|Run de Praxon:|Generado por el agente de Praxon)/.test(l))
+    .join(' ')
+    .replace(/[#*`>_]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (limpio.length <= max) return limpio;
+  const corte = limpio.slice(0, max);
+  const punto = corte.lastIndexOf('. ');
+  return punto > max * 0.5 ? corte.slice(0, punto + 1) : `${corte.slice(0, corte.lastIndexOf(' ') > 0 ? corte.lastIndexOf(' ') : max)}…`;
+}
+
+const prNumero = (url) => Number(/\/pull\/(\d+)/.exec(url ?? '')?.[1]) || null;
 
 export class AgentError extends Error {}
 
@@ -151,19 +168,41 @@ export class AgentService {
     return { fusionable: motivo === null, motivo, sinChecks: checks?.total === 0 };
   }
 
-  async #runAndPr(runId) {
+  async #runAndPr(runId, { historico = false } = {}) {
     const run = await this.#myraypa.getAgentRun({ runId });
     if (!run) throw new AgentError('No existe ese agente.');
-    if (run.estado !== 'pendiente_revision') throw new AgentError('Ese agente no tiene un pull request pendiente de revisión.');
+    if (!historico && run.estado !== 'pendiente_revision') throw new AgentError('Ese agente no tiene un pull request pendiente de revisión.');
+    if (historico && ![...HISTORICOS, 'pendiente_revision'].includes(run.estado)) throw new AgentError('Ese agente aún no ha terminado.');
     const pr = await this.#reader.findPull({ repo: run.repo, branch: branchOf(run) });
     if (!pr) throw new AgentError('No encuentro el pull request de ese agente.');
     return { run, pr };
   }
 
   async diff(runId) {
-    const { run, pr } = await this.#runAndPr(runId);
+    const { run, pr } = await this.#runAndPr(runId, { historico: true });
     const archivos = await this.#reader.pullFiles({ repo: run.repo, number: pr.numero });
-    return { runId, pr, archivos };
+    return { runId, pr, archivos, estado: run.estado };
+  }
+
+  /** Historial: agentes terminados (fusionados o fallidos), del más reciente al más antiguo. Solo datos de MyRAYPA; el PR se consulta en el detalle. */
+  async history({ limit = 30 } = {}) {
+    const n = Math.min(Math.max(Number(limit) || 30, 1), 100);
+    const runs = await this.#myraypa.listAgentRuns({ estados: HISTORICOS, limit: n });
+    return Promise.all(
+      runs.slice(0, n).map(async (run) => ({
+        runId: run.runId,
+        ticketId: run.ticketId,
+        ticket: await this.#titulo(run.ticketId),
+        tipo: run.tipo,
+        estado: run.estado,
+        repo: run.repo,
+        motivo: run.estado === 'fallido' ? (run.bloqueo ?? null) : null,
+        prNumero: prNumero(run.pullRequest),
+        prUrl: run.pullRequest ?? null,
+        creado: run.creado ?? null,
+        actualizado: run.actualizado ?? null,
+      })),
+    );
   }
 
   /** Fusiona. `sha` es el que la app mostro al usuario y `numero` el numero de PR que el usuario ha tecleado. */
@@ -179,12 +218,29 @@ export class AgentService {
       if (!f.fusionable) throw new AgentError(f.motivo);
       await this.#merger.mergePull({ repo: run.repo, number: pr.numero, sha: pr.sha, titulo: pr.titulo });
       await this.#patch(run, { estado: 'completado' });
-      await this.#audit.record({ ...evento, ok: true });
+      // Dejar constancia en el ticket. La confirmación de la fusión ya cubre este comentario; si falla, la fusión sigue siendo válida.
+      const comentado = await this.#comentar(run, pr, user);
+      await this.#audit.record({ ...evento, ok: true, comentado });
       this.#onChange();
-      return { ok: true, pr: pr.numero };
+      return { ok: true, pr: pr.numero, comentado };
     } catch (err) {
       await this.#audit.record({ ...evento, ok: false, error: err.message });
       return { ok: false, error: err.message };
+    }
+  }
+
+  /** Comentario breve en el ticket tras fusionar: qué se ha cambiado y en qué PR. */
+  async #comentar(run, pr, user) {
+    const cambios = `${pr.archivos} archivo${pr.archivos === 1 ? '' : 's'}, +${pr.adiciones} −${pr.borrados}`;
+    const cabecera = `Cambio fusionado por el agente de desarrollo (PR #${pr.numero}, ${cambios}): ${pr.titulo}.`;
+    const detalle = breveResumen(pr.resumen);
+    const texto = (detalle ? `${cabecera} ${detalle}` : cabecera).slice(0, 480);
+    try {
+      await this.#myraypa.commentTicket(run.ticketId, texto, { type: 'voice-assistant', user, sessionId: `fusion-${run.runId}` });
+      return true;
+    } catch (err) {
+      console.error('[agentes]', `no se ha podido comentar el ticket ${run.ticketId}:`, err.message);
+      return false;
     }
   }
 

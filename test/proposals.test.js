@@ -26,10 +26,12 @@ describe('revisión automática', () => {
     const t = build({ model });
     const b = await t.triage.run({ user: 'alex', trigger: 'manual' });
     expect(b.resumen).toBe('Hay un ticket que subir.');
-    expect(b.acciones).toHaveLength(1);
+    expect(b.acciones).toHaveLength(2); // el cambio y la opción de agente, desmarcada
     expect(b.acciones[0]).toMatchObject({ estado: 'pendiente', herramienta: 'myraypa_actualizar_ticket' });
     expect(b.acciones[0].resumen).toContain('Faltantes OF semana 43');
-    expect(t.store.pending()).toHaveLength(1);
+    expect(b.acciones[1]).toMatchObject({ herramienta: 'myraypa_lanzar_agente', opcional: true, estado: 'pendiente' });
+    expect(t.store.pending()).toHaveLength(2);
+    expect(t.myraypa.runs).toHaveLength(0); // el agente no se ha lanzado
     expect(t.myraypa.tickets.find((x) => x.id === '214').prioridad).toBe('media'); // nada escrito
     expect(t.audit.of('triage_run')).toHaveLength(1);
   });
@@ -151,7 +153,7 @@ describe('decidir una propuesta', () => {
     const r = await t.triage.decide({ briefingId: t.b.id, actionId: t.a.id, accepted: true, user: 'alex' });
     expect(r.ok).toBe(false);
     expect(t.myraypa.tickets.find((x) => x.id === '214').prioridad).toBe('media');
-    expect(t.store.pending()).toHaveLength(1);
+    expect(t.store.pending().filter((x) => !x.action.opcional)).toHaveLength(1);
   });
 
   it('la vista para la app no incluye los parámetros internos', async () => {
@@ -170,7 +172,7 @@ describe('herramientas de voz sobre propuestas', () => {
     const [pend, aplicar] = proposalTools({ store: t.store, triage: t.triage });
     const info = await pend.execute({}, {});
     expect(info.ultimaRevision.resumen).toBe('Resumen de hoy.');
-    expect(info.pendientes).toHaveLength(1);
+    expect(info.pendientes).toHaveLength(2); // el cambio y la opción de agente
     const ids = { briefingId: b.id, actionId: b.acciones[0].id };
     expect(await aplicar.summarize(ids, {})).toContain('Faltantes OF semana 43');
     await aplicar.execute(ids, { user: 'alex' });
@@ -208,5 +210,89 @@ describe('configuración de la revisión', () => {
     expect(c.TRIAGE_ENABLED).toBe(true);
     expect(loadConfig({ PRAXON_TOKEN: 'token-largo-123456' }).TRIAGE_ENABLED).toBe(false);
     expect(cfg.TRIAGE_ALLOWED_TOOLS).not.toContain('myraypa_lanzar_agente');
+  });
+});
+
+describe('una propuesta por ticket', () => {
+  const comment = (ticketId, id) => use('proponer_accion', { herramienta: 'myraypa_comentar_ticket', parametros: { ticketId, texto: 'Falta detalle del alcance' }, motivo: 'Pedir datos' }, id);
+  const suggest = () => use('sugerir_agente', { ticketId: '214', tipo: 'error', motivo: 'Es reproducible' });
+  async function grouped() {
+    const t = build({ model: stubModel([propose214(), comment('214', 'c214'), comment('301', 'c301'), suggest()], [summary()]) });
+    const b = await t.triage.run({ user: 'alex' });
+    const g = b.acciones.filter((a) => a.grupo === 'g-214');
+    return { ...t, b, g, update: g.find((a) => a.herramienta === 'myraypa_actualizar_ticket'), note: g.find((a) => a.herramienta === 'myraypa_comentar_ticket'), agent: g.find((a) => a.opcional) };
+  }
+
+  it('reúne las acciones de cada ticket y ofrece el agente, desmarcado, solo donde el proyecto lo permite', async () => {
+    const t = await grouped();
+    expect(t.g).toHaveLength(3);
+    expect(t.g[0].ticket).toBe('Faltantes OF semana 43');
+    expect(t.agent).toMatchObject({ args: { ticketId: '214', tipo: 'error' }, motivo: 'Es reproducible', origen: 'servidor' });
+    expect(t.b.acciones.filter((a) => a.grupo === 'g-301')).toHaveLength(1); // el proyecto MES no admite agentes
+    const v = t.triage.view();
+    expect(v.pendientes).toBe(2); // una propuesta por ticket
+    const agent = v.briefings[0].acciones.find((a) => a.opcional);
+    expect(agent).toMatchObject({ defecto: false, grupo: 'g-214' });
+    expect(v.briefings[0].acciones.find((a) => !a.opcional)).toMatchObject({ defecto: true });
+    expect(agent).not.toHaveProperty('args');
+  });
+
+  it('aplica solo lo marcado y descarta el resto sin lanzar el agente', async () => {
+    const t = await grouped();
+    const r = await t.triage.decideGroup({ briefingId: t.b.id, grupo: 'g-214', aprobar: [t.update.id], user: 'alex' });
+    expect(r.ok).toBe(true);
+    expect(t.myraypa.tickets.find((x) => x.id === '214').prioridad).toBe('alta');
+    expect(t.myraypa.runs).toHaveLength(0);
+    expect(t.update.estado).toBe('ejecutada');
+    expect(t.note.estado).toBe('descartada');
+    expect(t.agent.estado).toBe('descartada');
+    expect(t.audit.of('tool_call_start')).toHaveLength(1);
+    expect(t.triage.view().pendientes).toBe(1); // queda la del otro ticket
+  });
+
+  it('con el agente marcado, ejecuta primero los cambios y después lanza el agente', async () => {
+    const t = await grouped();
+    const r = await t.triage.decideGroup({ briefingId: t.b.id, grupo: 'g-214', aprobar: [t.agent.id, t.update.id, t.note.id], user: 'alex' });
+    expect(r).toMatchObject({ ok: true, mensaje: 'Hecho: 3 acciones.' });
+    expect(t.audit.of('tool_call_start').map((e) => e.tool)).toEqual(['myraypa_actualizar_ticket', 'myraypa_comentar_ticket', 'myraypa_lanzar_agente']);
+    expect(t.myraypa.runs).toHaveLength(1);
+    expect(t.myraypa.runs[0]).toMatchObject({ ticketId: '214', tipo: 'error' });
+  });
+
+  it('si un cambio está obsoleto no se lanza el agente y su opción sigue pendiente', async () => {
+    const t = await grouped();
+    await t.myraypa.updateTicket('214', { prioridad: 'alta' }, { type: 'otro' }); // alguien lo cambia a mano
+    const r = await t.triage.decideGroup({ briefingId: t.b.id, grupo: 'g-214', aprobar: [t.update.id, t.note.id, t.agent.id], user: 'alex' });
+    expect(r.ok).toBe(false);
+    expect(t.update.estado).toBe('obsoleta');
+    expect(t.note.estado).toBe('ejecutada');
+    expect(t.agent.estado).toBe('pendiente');
+    expect(t.myraypa.runs).toHaveLength(0);
+  });
+
+  it('sin nada marcado descarta la propuesta entera, y no se puede resolver dos veces', async () => {
+    const t = await grouped();
+    const r = await t.triage.decideGroup({ briefingId: t.b.id, grupo: 'g-214', aprobar: [], user: 'alex' });
+    expect(r).toMatchObject({ ok: true, mensaje: 'Propuesta descartada.' });
+    expect(t.g.every((a) => a.estado === 'descartada')).toBe(true);
+    expect(t.audit.of('tool_call_start')).toHaveLength(0);
+    const again = await t.triage.decideGroup({ briefingId: t.b.id, grupo: 'g-214', aprobar: [t.update.id], user: 'alex' });
+    expect(again.ok).toBe(false);
+  });
+
+  it('ignora ids de otras propuestas y grupos inexistentes', async () => {
+    const t = await grouped();
+    const other = t.b.acciones.find((a) => a.grupo === 'g-301');
+    const r = await t.triage.decideGroup({ briefingId: t.b.id, grupo: 'g-214', aprobar: [other.id], user: 'alex' });
+    expect(r.ok).toBe(true);
+    expect(other.estado).toBe('pendiente');
+    expect(await t.triage.decideGroup({ briefingId: t.b.id, grupo: 'g-999', aprobar: [], user: 'alex' })).toMatchObject({ ok: false });
+  });
+
+  it('el agente solo lo crea el servidor: el modelo no puede proponerlo', async () => {
+    const model = stubModel([use('proponer_accion', { herramienta: 'myraypa_lanzar_agente', parametros: { ticketId: '214', tipo: 'mejora' }, motivo: 'probar' })], [summary()]);
+    const t = build({ model });
+    const b = await t.triage.run({ user: 'alex' });
+    expect(b.acciones).toHaveLength(0);
   });
 });

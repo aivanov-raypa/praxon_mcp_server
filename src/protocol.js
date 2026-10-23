@@ -34,6 +34,13 @@ export const clientMessage = z.discriminatedUnion('type', [
   // Propuestas de la revision automatica (no pertenecen a ninguna conversacion: no llevan sessionId).
   z.object({ type: z.literal('proposals_list') }),
   z.object({ type: z.literal('proposals_run') }),
+  // Resolver la propuesta de un ticket entera: `aprobar` son las acciones marcadas; el resto del grupo se descarta.
+  z.object({
+    type: z.literal('proposal_group_decision'),
+    briefingId: z.string().min(1).max(100),
+    grupo: z.string().min(1).max(100),
+    aprobar: z.array(z.string().min(1).max(100)).max(50),
+  }),
   z.object({
     type: z.literal('proposal_decision'),
     briefingId: z.string().min(1).max(100),
@@ -45,6 +52,7 @@ export const clientMessage = z.discriminatedUnion('type', [
   // Agentes de desarrollo. La fusion solo existe aqui (nunca como herramienta del modelo): va atada al SHA revisado
   // y al numero de PR que el usuario teclea en la app.
   z.object({ type: z.literal('agents_list') }),
+  z.object({ type: z.literal('agents_history'), limit: z.number().int().min(1).max(100).optional() }),
   z.object({ type: z.literal('agent_diff'), runId: z.string().min(1).max(64) }),
   z.object({
     type: z.literal('agent_merge'),

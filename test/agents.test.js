@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AgentService, branchOf } from '../src/agents/service.js';
+import { AgentService, branchOf, breveResumen } from '../src/agents/service.js';
 import { FakeGithubReader } from '../src/integrations/github-read.js';
 import { FakeGithubMerger } from '../src/integrations/github-merge.js';
 import { MemoryAudit } from '../src/audit/log.js';
@@ -124,5 +124,72 @@ describe('revisión y fusión', () => {
   it('un agente que no está pendiente de revisión no se puede fusionar', async () => {
     const b = await build();
     expect((await b.svc.merge({ runId: 'run-1', sha: SHA, numero: 12, user: 'alex' })).error).toMatch(/pendiente de revisión/);
+  });
+});
+
+describe('comentario tras fusionar', () => {
+  const merged = async (extra = {}) => {
+    const r = { ticketId: '215', runId: 'run-1' };
+    const b = await build({ workflowRuns: [wf(r, { estado: 'completed', resultado: 'success' })], pullRequests: [pr(r, { adiciones: 20, borrados: 5, resumen: 'Ticket MyRAYPA: 215\nRun de Praxon: run-1\n\nSe ha añadido la exportación a PDF de los certificados. Falta probarlo con certificados grandes.\n\nGenerado por el agente de Praxon. Requiere revisión humana antes de fusionar.', ...extra })] });
+    await b.svc.tick();
+    return b;
+  };
+
+  it('deja un comentario breve en el ticket con el PR y lo que se ha cambiado', async () => {
+    const b = await merged();
+    const r = await b.svc.merge({ runId: 'run-1', sha: SHA, numero: 12, user: 'alex' });
+    expect(r).toMatchObject({ ok: true, comentado: true });
+    const c = b.myraypa.tickets.find((t) => t.id === '215').comentarios.at(-1);
+    expect(c.texto).toContain('PR #12');
+    expect(c.texto).toContain('+20 −5');
+    expect(c.texto).toContain('exportación a PDF');
+    expect(c.texto).not.toContain('Run de Praxon');
+    expect(c.texto).not.toContain('Generado por');
+    expect(c.texto.length).toBeLessThanOrEqual(480);
+    expect(c.origin).toMatchObject({ type: 'voice-assistant', user: 'alex' });
+    expect(b.audit.of('agent_merge')[0]).toMatchObject({ ok: true, comentado: true });
+  });
+
+  it('si el comentario falla, la fusión sigue siendo correcta', async () => {
+    const b = await merged();
+    b.myraypa.commentTicket = async () => { throw new Error('MyRAYPA no responde'); };
+    const r = await b.svc.merge({ runId: 'run-1', sha: SHA, numero: 12, user: 'alex' });
+    expect(r).toMatchObject({ ok: true, comentado: false });
+    expect(b.state().estado).toBe('completado');
+  });
+
+  it('recorta el resumen sin pasar de la longitud máxima', () => {
+    const largo = `${'Cambio importante en el módulo. '.repeat(30)}`;
+    expect(breveResumen(largo, 120).length).toBeLessThanOrEqual(121);
+    expect(breveResumen('')).toBe('');
+  });
+});
+
+describe('historial', () => {
+  it('lista los agentes terminados y no los abiertos, del más reciente al más antiguo', async () => {
+    const r = { ticketId: '215', runId: 'run-1' };
+    const b = await build({ workflowRuns: [wf(r, { estado: 'completed', resultado: 'success' })], pullRequests: [pr(r)] });
+    await b.svc.tick();
+    expect(await b.svc.history()).toEqual([]);
+    await b.svc.merge({ runId: 'run-1', sha: SHA, numero: 12, user: 'alex' });
+    const otro = await b.myraypa.createAgentRun({ ticketId: '216', tipo: 'error' }, 'test');
+    await b.myraypa.patchAgentRun(otro.runId, { estado: 'en_curso' });
+    await b.myraypa.patchAgentRun(otro.runId, { estado: 'fallido', pregunta: 'El agente ha terminado con error.' });
+    const h = await b.svc.history();
+    expect(h.map((x) => x.runId)).toEqual([otro.runId, 'run-1']);
+    expect(h[0]).toMatchObject({ estado: 'fallido', motivo: 'El agente ha terminado con error.' });
+    expect(h[1]).toMatchObject({ estado: 'completado', motivo: null, ticket: expect.any(String) });
+  });
+
+  it('el diff de un agente fusionado sigue disponible, pero no se puede volver a fusionar', async () => {
+    const r = { ticketId: '215', runId: 'run-1' };
+    const b = await build({ workflowRuns: [wf(r, { estado: 'completed', resultado: 'success' })], pullRequests: [pr(r)] });
+    await b.svc.tick();
+    await b.svc.merge({ runId: 'run-1', sha: SHA, numero: 12, user: 'alex' });
+    const d = await b.svc.diff('run-1');
+    expect(d).toMatchObject({ estado: 'completado' });
+    expect(d.archivos[0].ruta).toBe('a.js');
+    const again = await b.svc.merge({ runId: 'run-1', sha: SHA, numero: 12, user: 'alex' });
+    expect(again.ok).toBe(false);
   });
 });

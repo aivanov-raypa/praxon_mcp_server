@@ -138,6 +138,10 @@ export function createServer({
         return null;
       });
       if (r || r0) broadcast(triage.view());
+    } else if (msg.type === 'proposal_group_decision') {
+      const r = await triage.decideGroup({ briefingId: msg.briefingId, grupo: msg.grupo, aprobar: msg.aprobar, user: config.PRAXON_USER });
+      emit({ type: 'proposal_group_result', briefingId: msg.briefingId, grupo: msg.grupo, ...r });
+      broadcast(triage.view());
     } else {
       const r = await triage.decide({ briefingId: msg.briefingId, actionId: msg.actionId, accepted: msg.accepted, user: config.PRAXON_USER });
       emit({ type: 'proposal_result', briefingId: msg.briefingId, actionId: msg.actionId, ...r });
@@ -158,6 +162,8 @@ export function createServer({
       emit({ type: 'error', message: 'El seguimiento de agentes no está configurado (falta GITHUB_READ_TOKEN).' });
     } else if (msg.type === 'agents_list') {
       emit({ type: 'agents', canMerge: agents.canMerge, items: await agents.list() });
+    } else if (msg.type === 'agents_history') {
+      emit({ type: 'agents_history', items: await agents.history({ limit: msg.limit }) });
     } else if (msg.type === 'agent_diff') {
       const d = await agents.diff(msg.runId).catch((err) => ({ error: err.message }));
       emit({ type: 'agent_diff', runId: msg.runId, ...d });

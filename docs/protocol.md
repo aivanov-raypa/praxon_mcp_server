@@ -62,20 +62,25 @@ resumen con acciones **preparadas pero sin ejecutar**. Estos mensajes no pertene
 { "type": "proposals_list" }
 { "type": "proposals_run" }
 { "type": "proposal_decision", "briefingId": "...", "actionId": "...", "accepted": true }
+{ "type": "proposal_group_decision", "briefingId": "...", "grupo": "g-214", "aprobar": ["actionId", "..."] }
 ```
 
 - `proposals_list`: pide el estado actual. `proposals_run`: lanza una revisión ahora.
-- `proposal_decision`: aprueba (`accepted: true`) o descarta una acción. Es la única forma de que se ejecute.
+- `proposal_decision`: aprueba (`accepted: true`) o descarta una acción suelta.
+- `proposal_group_decision`: resuelve la propuesta de un ticket entera. `aprobar` son las acciones que el usuario ha marcado; el resto del grupo se descarta (con la lista vacía, se descarta todo). Antes de ejecutar nada se comprueba que todas las marcadas siguen vigentes; se ejecutan los cambios y, al final, el agente. Si un cambio falla o está obsoleto, el agente no se lanza y su opción sigue pendiente.
 
 ### servidor → app
 
 ```json
 { "type": "proposals", "pendientes": 2, "running": false,
   "briefings": [ { "id": "...", "createdAt": "2026-10-23T06:30:00.000Z", "trigger": "schedule", "resumen": "...",
-    "acciones": [ { "id": "...", "herramienta": "myraypa_actualizar_ticket", "resumen": "Voy a cambiar el ticket ...: prioridad de media a alta", "motivo": "...", "estado": "pendiente" } ] } ] }
+    "acciones": [ { "id": "...", "herramienta": "myraypa_actualizar_ticket", "resumen": "Voy a cambiar el ticket ...: prioridad de media a alta", "motivo": "...", "estado": "pendiente", "ticketId": "214", "ticket": "Faltantes OF semana 43", "grupo": "g-214", "opcional": false, "defecto": true } ] } ] }
 { "type": "proposal_result", "briefingId": "...", "actionId": "...", "ok": true, "estado": "ejecutada", "mensaje": "Hecho." }
+{ "type": "proposal_group_result", "briefingId": "...", "grupo": "g-214", "ok": true, "mensaje": "Hecho: 2 acciones.", "resultados": [ { "actionId": "...", "ok": true, "estado": "ejecutada", "mensaje": "Hecho." } ] }
 ```
 
+- Una propuesta = un ticket: las acciones con el mismo `grupo` son una sola propuesta y `pendientes` cuenta propuestas, no acciones. Cada acción lleva su casilla: `defecto` indica si nace marcada.
+- Si el proyecto del ticket permite agentes (autonomía `agentes` y repositorio), el grupo incluye una acción `opcional` (`myraypa_lanzar_agente`) que nace **desmarcada** (`defecto: false`). La crea el servidor, nunca el modelo: el modelo solo puede sugerir el tipo (mejora o error) con `sugerir_agente`.
 - `proposals` se envía como respuesta a `proposals_list` y a **todos los clientes conectados** cuando cambia algo (revisión
   nueva o decisión). Lleva las 10 revisiones más recientes; los parámetros internos de las acciones no se envían.
 - Estados de una acción: `pendiente`, `ejecutada`, `descartada`, `fallida`, `obsoleta` (el ticket ha cambiado desde la
@@ -118,10 +123,11 @@ El servidor responde `{ "type": "speech", "id", "text", "format": "mp3", "data":
 App → servidor:
 
 - `{ "type": "agents_list" }`: agentes abiertos con su PR y checks en vivo.
-- `{ "type": "agent_diff", "runId" }`: archivos cambiados del PR (parche acotado).
+- `{ "type": "agents_history", "limit"? }`: historial de agentes terminados (completado o fallido), del más reciente al más antiguo; `limit` 1-100, 30 por defecto.
+- `{ "type": "agent_diff", "runId" }`: archivos cambiados del PR (parche acotado). Vale también para agentes terminados.
 - `{ "type": "agent_merge", "runId", "sha", "numero" }`: fusiona el PR. `sha` es el que mostró la app y `numero` el número de PR que el usuario ha tecleado. Solo existe aquí: no es una herramienta del modelo.
 
-Servidor → app: `agents { canMerge, items[] }` (cada item: runId, ticketId, ticket, tipo, estado, repo, bloqueo, y si hay PR: `pr {numero,url,sha,titulo,archivos,adiciones,borrados,mergeable}`, `checks {total,ok,fallando,pendientes,items}`, `fusionable`, `motivo`, `sinChecks`), `agent_diff { runId, pr, archivos[] | error }`, `agent_merge_result { runId, ok, error? , pr? }`, y `agents_changed` (difusión: la app vuelve a pedir la lista).
+Servidor → app: `agents { canMerge, items[] }` (cada item: runId, ticketId, ticket, tipo, estado, repo, bloqueo, y si hay PR: `pr {numero,url,sha,titulo,archivos,adiciones,borrados,mergeable}`, `checks {total,ok,fallando,pendientes,items}`, `fusionable`, `motivo`, `sinChecks`), `agents_history { items[] }` (cada item: runId, ticketId, ticket, tipo, estado, repo, motivo, prNumero, prUrl, creado, actualizado), `agent_diff { runId, pr (con resumen), archivos[], estado | error }`, `agent_merge_result { runId, ok, error? , pr? }`, y `agents_changed` (difusión: la app vuelve a pedir la lista).
 
 
 ## Consumos

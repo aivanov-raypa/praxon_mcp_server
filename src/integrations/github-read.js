@@ -157,6 +157,7 @@ export class HttpGithubReader {
       archivos: p.changed_files ?? 0,
       adiciones: p.additions ?? 0,
       borrados: p.deletions ?? 0,
+      resumen: String(p.body ?? '').slice(0, 4000),
     };
   }
 
