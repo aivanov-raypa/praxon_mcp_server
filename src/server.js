@@ -43,6 +43,7 @@ export function createServer({
   audit,
   triage = null,
   agents = null,
+  usage = null,
   sessions = new SessionStore(),
   myraypa = null,
   auth = new DeviceAuth({ config, myraypa }),
@@ -144,6 +145,14 @@ export function createServer({
     }
   }
 
+  async function handleUsage(msg, emit) {
+    if (!usage) {
+      emit({ type: 'error', message: 'El panel de consumos no está disponible.' });
+      return;
+    }
+    emit({ type: 'usage', ...(await usage.get({ refresh: msg.refresh === true })) });
+  }
+
   async function handleAgents(msg, emit, identity) {
     if (!agents) {
       emit({ type: 'error', message: 'El seguimiento de agentes no está configurado (falta GITHUB_READ_TOKEN).' });
@@ -230,6 +239,13 @@ export function createServer({
         speakTimes.push(now);
         synthesizePhrase(msg.text).then((a) => {
           if (ws.readyState === ws.OPEN) emit({ type: 'speech', id: msg.id, text: msg.text, ...(a && { format: a.format, data: a.data }) });
+        });
+        return;
+      }
+      if (msg.type === 'usage_get') {
+        handleUsage(msg, emit).catch((err) => {
+          console.error('[consumos]', err);
+          emit({ type: 'error', message: 'No he podido obtener los consumos.' });
         });
         return;
       }

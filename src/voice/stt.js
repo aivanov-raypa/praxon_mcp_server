@@ -24,12 +24,13 @@ const ERROR_TEXT = {
 export class ElevenLabsScribe {
   #cfg;
 
-  constructor({ apiKey, baseUrl = 'wss://api.elevenlabs.io', language = 'es', silenceSecs = 1.2, maxSeconds = 45, WebSocketImpl = WebSocket }) {
-    this.#cfg = { apiKey, baseUrl: baseUrl.replace(/\/+$/, ''), language, silenceSecs, maxSeconds, WebSocketImpl };
+  constructor({ apiKey, baseUrl = 'wss://api.elevenlabs.io', language = 'es', silenceSecs = 1.2, maxSeconds = 45, WebSocketImpl = WebSocket, onUsage = null }) {
+    this.#cfg = { onUsage, apiKey, baseUrl: baseUrl.replace(/\/+$/, ''), language, silenceSecs, maxSeconds, WebSocketImpl };
   }
 
   open({ onPartial = () => {}, onFinal = () => {}, onError = () => {}, onClose = () => {} }) {
-    const { apiKey, baseUrl, language, silenceSecs, maxSeconds, WebSocketImpl } = this.#cfg;
+    const { apiKey, baseUrl, language, silenceSecs, maxSeconds, WebSocketImpl, onUsage } = this.#cfg;
+    let sentBytes = 0;
     const q = new URLSearchParams({
       model_id: 'scribe_v2_realtime',
       audio_format: `pcm_${SAMPLE_RATE}`,
@@ -50,6 +51,13 @@ export class ElevenLabsScribe {
       if (closed) return;
       closed = true;
       clearTimeout(cap);
+      if (sentBytes > 0) {
+        try {
+          onUsage?.({ seconds: sentBytes / (SAMPLE_RATE * 2) });
+        } catch {
+          /* el contador nunca debe romper el dictado */
+        }
+      }
       try {
         ws.close();
       } catch {
@@ -101,7 +109,10 @@ export class ElevenLabsScribe {
     const push = (m) => (opened ? ws.send(m) : queue.push(m));
     return {
       send(pcm) {
-        if (!closed && pcm.length) push(chunk(pcm, false));
+        if (!closed && pcm.length) {
+          sentBytes += pcm.length;
+          push(chunk(pcm, false));
+        }
       },
       /** Fin de lo que el usuario quería decir (tocó para parar): confirma lo transcrito hasta ahora. */
       finish() {

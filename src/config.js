@@ -26,6 +26,14 @@ const schema = z
     // Lectura del código de los proyectos (revisión y conversación). Token de grano fino SOLO de lectura
     // (Contents, Pull requests, Metadata), distinto de GITHUB_TOKEN. Sin él, el asistente no consulta código.
     GITHUB_READ_TOKEN: z.string().optional(),
+    // Panel de consumos (todo opcional; sin credencial, esa tarjeta sale "sin configurar").
+    USAGE_PATH: z.string().default('./data/usage.json'),
+    USAGE_CACHE_MINUTES: z.coerce.number().min(1).default(10),
+    GITHUB_ORG: z.string().default('raypa-it'),
+    // Token de grano fino con permiso de facturación de la organización (solo lectura).
+    GITHUB_BILLING_TOKEN: z.string().optional(),
+    // Clave de administración de Anthropic (sk-ant-admin...). Es sensible: gestiona claves y miembros de la organización.
+    ANTHROPIC_ADMIN_KEY: z.string().optional(),
     // Fusión de pull requests desde la app. Token de grano fino PROPIO (Pull requests y Contents en escritura). Sin él no se puede fusionar.
     GITHUB_MERGE_TOKEN: z.string().optional(),
     GITHUB_MERGE_METHOD: z.enum(['squash', 'merge', 'rebase']).default('squash'),

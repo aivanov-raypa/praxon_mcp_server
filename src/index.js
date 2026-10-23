@@ -11,7 +11,7 @@ try {
   process.exit(1);
 }
 
-const { server, registry, scheduler, watcher, agents } = createApp(config);
+const { server, registry, scheduler, watcher, agents, tracker } = createApp(config);
 const port = await server.listen();
 
 console.log(`${config.ASSISTANT_NAME}: servidor escuchando en el puerto ${port}`);
@@ -51,6 +51,7 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     scheduler.stop();
     watcher.stop();
     agents?.stop();
+    await tracker.save().catch(() => {});
     await server.close();
     process.exit(0);
   });

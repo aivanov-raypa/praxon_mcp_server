@@ -67,6 +67,9 @@ Para configurarlo de verdad, copia `.env.example` a `.env`:
 | `GITHUB_MERGE_METHOD` | `squash` (por defecto), `merge` o `rebase` |
 | `AGENTS_WATCH` / `AGENTS_WATCH_SECONDS` | Seguimiento de los agentes en GitHub (por defecto sí, cada 60 s). Necesita que `GITHUB_READ_TOKEN` tenga además Actions y Checks (y Commit statuses) en lectura |
 | `AGENTS_QUEUE_TIMEOUT_MINUTES` | Minutos en cola sin que GitHub arranque el workflow antes de marcar el agente como fallido (10) |
+| `USAGE_PATH` / `USAGE_CACHE_MINUTES` | Historial de consumo propio de Praxon (tokens de Anthropic por modelo, caracteres de voz y segundos de dictado, por día; 90 días) y minutos de caché de los datos externos (10) |
+| `GITHUB_ORG` / `GITHUB_BILLING_TOKEN` | Organización de GitHub (`raypa-it`) y token de grano fino con permiso de facturación de la organización en solo lectura, para ver minutos de Actions e importes en el panel de consumos. Opcional |
+| `ANTHROPIC_ADMIN_KEY` | Clave de administración de Anthropic (`sk-ant-admin…`) para ver gasto y tokens de toda la organización (incluye Claude Code). Opcional y sensible: puede gestionar claves y miembros, guárdala solo aquí |
 | `TRIAGE_WATCH` (`true`), `TRIAGE_WATCH_MINUTES` (5), `TRIAGE_WATCH_SETTLE_MINUTES` (3), `TRIAGE_WATCH_BATCH` (5), `TRIAGE_WATCH_FROM`, `REVIEWED_PATH` | Vigilante de tickets nuevos (con `TRIAGE_ENABLED=true`): cada `TRIAGE_WATCH_MINUTES` pregunta a MyRAYPA por los tickets creados desde la marca de corte (por defecto, el primer arranque; `TRIAGE_WATCH_FROM` la fija) y revisa solo los que llevan `TRIAGE_WATCH_SETTLE_MINUTES` creados, en lotes de `TRIAGE_WATCH_BATCH`. Solo deja aviso si hay algo que aprobar |
 | `TRIAGE_CODE_MAX_CALLS` | Consultas de código que puede hacer cada revisión (12 por defecto; 0 las desactiva) |
 

@@ -44,6 +44,7 @@ export class ElevenLabsVoice {
   #now;
   #breakerThreshold;
   #breakerCooldownMs;
+  #onUsage;
 
   #active = 0;
   #waiters = [];
@@ -63,7 +64,9 @@ export class ElevenLabsVoice {
     now = Date.now,
     breakerThreshold = 3,
     breakerCooldownMs = 60_000,
+    onUsage = null,
   }) {
+    this.#onUsage = onUsage;
     if (!outputFormat.startsWith('mp3_')) throw new VoiceError('La app solo reproduce mp3 (output_format mp3_*).');
     this.#apiKey = apiKey;
     this.#voiceId = voiceId;
@@ -108,6 +111,11 @@ export class ElevenLabsVoice {
       const bytes = Buffer.from(await res.arrayBuffer());
       if (bytes.length === 0) throw new VoiceError('ElevenLabs ha devuelto un audio vacío.');
       this.#failures = 0;
+      try {
+        this.#onUsage?.({ chars: text.length });
+      } catch {
+        /* el contador nunca debe romper la voz */
+      }
       return { format: 'mp3', data: bytes.toString('base64') };
     } catch (err) {
       if (!signal?.aborted) this.#registerFailure(err); // interrumpir al usuario no es un fallo del servicio

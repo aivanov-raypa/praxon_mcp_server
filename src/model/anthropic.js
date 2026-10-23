@@ -29,8 +29,10 @@ export function withoutThinking(messages) {
 export class AnthropicModel {
   #client;
   #maxTokens;
+  #onUsage;
 
-  constructor({ apiKey, maxTokens = 1024, client }) {
+  constructor({ apiKey, maxTokens = 1024, client, onUsage = null }) {
+    this.#onUsage = onUsage;
     this.#client = client ?? new Anthropic({ apiKey });
     this.#maxTokens = maxTokens;
   }
@@ -64,6 +66,20 @@ export class AnthropicModel {
       }
     }
     const final = await stream.finalMessage();
+    const u = final.usage;
+    if (u && this.#onUsage) {
+      try {
+        this.#onUsage({
+          model: final.model ?? model,
+          input: u.input_tokens ?? 0,
+          output: u.output_tokens ?? 0,
+          cacheRead: u.cache_read_input_tokens ?? 0,
+          cacheWrite: u.cache_creation_input_tokens ?? 0,
+        });
+      } catch {
+        /* el contador nunca debe romper una respuesta */
+      }
+    }
     yield { type: 'message', content: final.content, stopReason: final.stop_reason };
   }
 }

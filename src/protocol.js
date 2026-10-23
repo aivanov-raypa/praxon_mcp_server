@@ -40,6 +40,8 @@ export const clientMessage = z.discriminatedUnion('type', [
     actionId: z.string().min(1).max(100),
     accepted: z.boolean(),
   }),
+  // Panel de consumos (solo lectura). refresh=true ignora la cache.
+  z.object({ type: z.literal('usage_get'), refresh: z.boolean().optional() }),
   // Agentes de desarrollo. La fusion solo existe aqui (nunca como herramienta del modelo): va atada al SHA revisado
   // y al numero de PR que el usuario teclea en la app.
   z.object({ type: z.literal('agents_list') }),

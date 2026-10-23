@@ -122,3 +122,8 @@ App → servidor:
 - `{ "type": "agent_merge", "runId", "sha", "numero" }`: fusiona el PR. `sha` es el que mostró la app y `numero` el número de PR que el usuario ha tecleado. Solo existe aquí: no es una herramienta del modelo.
 
 Servidor → app: `agents { canMerge, items[] }` (cada item: runId, ticketId, ticket, tipo, estado, repo, bloqueo, y si hay PR: `pr {numero,url,sha,titulo,archivos,adiciones,borrados,mergeable}`, `checks {total,ok,fallando,pendientes,items}`, `fusionable`, `motivo`, `sinChecks`), `agent_diff { runId, pr, archivos[] | error }`, `agent_merge_result { runId, ok, error? , pr? }`, y `agents_changed` (difusión: la app vuelve a pedir la lista).
+
+
+## Consumos
+
+App → servidor: `{ "type": "usage_get", "refresh"?: true }`. Servidor → app: `usage` con `generado`, `praxon` (serie diaria de 14 días con tokens, llamadas, caracteres de voz y segundos de dictado; totales; tokens por modelo), y las tarjetas `elevenlabs`, `github` y `anthropic`, cada una con `estado` (`ok`, `sin_configurar` o `error` con `mensaje`). Los datos externos se cachean `USAGE_CACHE_MINUTES` minutos; `refresh` ignora la caché.

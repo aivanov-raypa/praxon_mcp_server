@@ -19,6 +19,9 @@ import { TriageScheduler } from './proposals/scheduler.js';
 import { ReviewedStore } from './proposals/reviewed.js';
 import { TicketWatcher } from './proposals/watcher.js';
 import { AgentService } from './agents/service.js';
+import { UsageTracker } from './usage/tracker.js';
+import { UsageService } from './usage/service.js';
+import { anthropicUsage, elevenLabsUsage, githubUsage } from './usage/providers.js';
 import { HttpGithubMerger } from './integrations/github-merge.js';
 import { proposalTools } from './proposals/tools.js';
 
@@ -36,10 +39,11 @@ export function createApp(config, overrides = {}) {
     (config.GITHUB_MODE === 'http' ? new HttpGithub({ token: config.GITHUB_TOKEN, workflowFile: config.GITHUB_WORKFLOW_FILE }) : new FakeGithub());
   const githubReader = overrides.githubReader ?? (config.GITHUB_READ_TOKEN ? new HttpGithubReader({ token: config.GITHUB_READ_TOKEN }) : null);
   const merger = overrides.merger ?? (config.GITHUB_MERGE_TOKEN ? new HttpGithubMerger({ token: config.GITHUB_MERGE_TOKEN, method: config.GITHUB_MERGE_METHOD }) : null);
+  const tracker = overrides.usageTracker ?? new UsageTracker(config.USAGE_PATH, { now: overrides.now });
   const model =
     overrides.model ??
     (config.MODEL_PROVIDER === 'anthropic'
-      ? new AnthropicModel({ apiKey: config.ANTHROPIC_API_KEY, maxTokens: config.MAX_TOKENS })
+      ? new AnthropicModel({ apiKey: config.ANTHROPIC_API_KEY, maxTokens: config.MAX_TOKENS, onUsage: (u) => tracker.recordModel(u) })
       : new ScriptedModel());
 
   const voice =
@@ -52,6 +56,7 @@ export function createApp(config, overrides = {}) {
           outputFormat: config.ELEVENLABS_OUTPUT_FORMAT,
           baseUrl: config.ELEVENLABS_BASE_URL,
           languageCode: config.ELEVENLABS_LANGUAGE,
+          onUsage: ({ chars }) => tracker.recordTts(chars),
         })
       : null);
 
@@ -64,6 +69,7 @@ export function createApp(config, overrides = {}) {
           language: config.STT_LANGUAGE,
           silenceSecs: config.STT_SILENCE_SECS,
           maxSeconds: config.STT_MAX_SECONDS,
+          onUsage: ({ seconds }) => tracker.recordStt(seconds),
         })
       : null);
 
@@ -87,11 +93,23 @@ export function createApp(config, overrides = {}) {
     voice,
     now: overrides.now,
   });
+  const usage =
+    overrides.usage ??
+    new UsageService({
+      tracker,
+      cacheMs: config.USAGE_CACHE_MINUTES * 60_000,
+      now: overrides.now,
+      providers: {
+        elevenlabs: elevenLabsUsage({ apiKey: config.ELEVENLABS_API_KEY, baseUrl: config.ELEVENLABS_BASE_URL }),
+        github: githubUsage({ token: config.GITHUB_BILLING_TOKEN, org: config.GITHUB_ORG, now: overrides.now }),
+        anthropic: anthropicUsage({ adminKey: config.ANTHROPIC_ADMIN_KEY, now: overrides.now }),
+      },
+    });
   let server;
   const agents = githubReader
     ? new AgentService({ myraypa, reader: githubReader, merger, audit, config, now: overrides.now, onChange: () => server?.broadcast({ type: 'agents_changed' }) })
     : null;
-  server = createServer({ config, orchestrator, audit, triage, myraypa, auth: overrides.auth, stt, voice, agents });
+  server = createServer({ config, orchestrator, audit, triage, myraypa, auth: overrides.auth, stt, voice, agents, usage });
   // Se arranca desde index.js (start); en los tests no se programa nada.
   const scheduler = new TriageScheduler({
     times: config.TRIAGE_TIMES,
@@ -104,5 +122,5 @@ export function createApp(config, overrides = {}) {
   // Tickets nuevos: sondeo periódico a MyRAYPA (se arranca desde index.js). La marca de corte se crea al construirlo.
   const reviewed = overrides.reviewed ?? new ReviewedStore(config.REVIEWED_PATH, { from: config.TRIAGE_WATCH_FROM, now: overrides.now });
   const watcher = new TicketWatcher({ myraypa, triage, reviewed, config, now: overrides.now, onBriefing: () => server.broadcast(triage.view()) });
-  return { server, orchestrator, registry, audit, myraypa, github, githubReader, model, voice, stt, store, triage, scheduler, watcher, reviewed, agents, merger };
+  return { server, orchestrator, registry, audit, myraypa, github, githubReader, model, voice, stt, store, triage, scheduler, watcher, reviewed, agents, merger, usage, tracker };
 }
