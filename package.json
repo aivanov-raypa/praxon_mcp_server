@@ -9,6 +9,7 @@
     "start": "node --env-file-if-exists=.env src/index.js",
     "dev": "node --watch --env-file-if-exists=.env src/index.js",
     "pair": "node --env-file-if-exists=.env src/pair.js",
+    "check-model": "node --env-file-if-exists=.env src/check-model.js",
     "mock": "node --env-file-if-exists=.env mock/server.js",
     "test": "vitest run"
   },

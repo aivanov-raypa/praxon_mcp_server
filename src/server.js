@@ -46,6 +46,7 @@ export function createServer({
   myraypa = null,
   auth = new DeviceAuth({ config, myraypa }),
   redeemLimiter = new RateLimiter(),
+  stt = null,
 }) {
   const sendJson = (res, status, body) => res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify(body));
 
@@ -141,14 +142,50 @@ export function createServer({
     };
     const identity = req.praxonIdentity;
     ws.identity = identity;
+    let dictation = null; // transcripción en curso de esta conexión
+    const stopDictation = () => {
+      const d = dictation;
+      dictation = null; // antes de cerrar: así onClose no avisa a la app de un cierre que provocamos nosotros
+      d?.close();
+    };
+    emit({ type: 'capabilities', stt: Boolean(stt) });
     log({ event: 'connection_open', user: identity.user, deviceId: identity.deviceId, remote: req.socket.remoteAddress });
 
-    ws.on('message', (raw) => {
+    ws.on('message', (raw, isBinary) => {
+      if (isBinary) {
+        // Audio del dictado. Sin dictado activo se descarta.
+        if (dictation) dictation.send(Buffer.isBuffer(raw) ? raw : Buffer.concat([].concat(raw)));
+        return;
+      }
       let msg;
       try {
         msg = clientMessage.parse(JSON.parse(raw));
       } catch {
         emit({ type: 'error', message: 'Mensaje no válido.' });
+        return;
+      }
+      if (msg.type === 'stt_start' || msg.type === 'stt_stop' || msg.type === 'stt_cancel') {
+        if (msg.type === 'stt_cancel') {
+          stopDictation();
+        } else if (msg.type === 'stt_stop') {
+          dictation?.finish();
+        } else if (!stt) {
+          emit({ type: 'stt_error', message: 'La transcripción no está configurada en el servidor.' });
+        } else {
+          stopDictation();
+          log({ event: 'stt_start', user: identity.user, deviceId: identity.deviceId });
+          const mine = (dictation = stt.open({
+            onPartial: (text) => dictation === mine && emit({ type: 'stt_partial', text }),
+            onFinal: (text) => dictation === mine && emit({ type: 'stt_final', text }),
+            onError: (message) => dictation === mine && emit({ type: 'stt_error', message }),
+            onClose: () => {
+              if (dictation === mine) {
+                dictation = null;
+                emit({ type: 'stt_ended' });
+              }
+            },
+          }));
+        }
         return;
       }
       if (msg.type.startsWith('proposal')) {
@@ -177,6 +214,7 @@ export function createServer({
     });
 
     ws.on('close', () => {
+      stopDictation();
       // Una accion pendiente nunca sobrevive a un corte de conexion, y no se sigue gastando en una respuesta que nadie oye.
       for (const session of bound) {
         if (session.connection !== ws) continue; // la app ya se ha reconectado con otro socket

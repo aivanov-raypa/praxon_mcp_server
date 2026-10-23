@@ -32,6 +32,13 @@ const schema = z
     ELEVENLABS_BASE_URL: z.string().url().default('https://api.elevenlabs.io'),
     ELEVENLABS_LANGUAGE: z.string().default('es'),
 
+    // Dictado: la app envía el audio del micrófono y el servidor lo transcribe en directo (usa ELEVENLABS_API_KEY).
+    STT_PROVIDER: z.enum(['none', 'elevenlabs']).default('none'),
+    STT_LANGUAGE: z.string().default('es'),
+    STT_SILENCE_SECS: z.coerce.number().min(0.3).max(3).default(1.2),
+    STT_MAX_SECONDS: z.coerce.number().positive().default(45),
+    ELEVENLABS_STT_URL: z.string().regex(/^wss?:\/\/.+/, 'debe empezar por ws:// o wss://').default('wss://api.elevenlabs.io'),
+
     // Revision automatica: el asistente analiza los tickets por su cuenta y deja propuestas que el usuario aprueba.
     TRIAGE_ENABLED: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
     TRIAGE_TIMES: z
@@ -43,6 +50,8 @@ const schema = z
       .string()
       .default('myraypa_actualizar_ticket,myraypa_comentar_ticket,myraypa_cambiar_fechas_ticket,myraypa_cambiar_etiquetas_ticket,myraypa_cambiar_participantes_ticket,myraypa_crear_subtarea')
       .transform((v) => v.split(',').map((x) => x.trim()).filter(Boolean)),
+    // Modelo de la revisión automática (analiza muchos tickets: conviene el más capaz). La conversación usa MODEL_DEFAULT.
+    TRIAGE_MODEL: z.string().default('claude-sonnet-5-5'),
     TRIAGE_MAX_STEPS: z.coerce.number().int().positive().default(14),
     TRIAGE_MAX_ACTIONS: z.coerce.number().int().positive().default(10),
     TRIAGE_TIMEOUT_MS: z.coerce.number().int().positive().default(180_000),
@@ -65,6 +74,7 @@ const schema = z
       need(c.ELEVENLABS_API_KEY, 'ELEVENLABS_API_KEY', 'obligatoria con VOICE_PROVIDER=elevenlabs');
       need(c.ELEVENLABS_VOICE_ID, 'ELEVENLABS_VOICE_ID', 'obligatoria con VOICE_PROVIDER=elevenlabs');
     }
+    if (c.STT_PROVIDER === 'elevenlabs') need(c.ELEVENLABS_API_KEY, 'ELEVENLABS_API_KEY', 'obligatoria con STT_PROVIDER=elevenlabs');
     if (c.GITHUB_MODE === 'http') need(c.GITHUB_TOKEN, 'GITHUB_TOKEN', 'obligatoria con GITHUB_MODE=http');
   });
 

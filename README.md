@@ -87,6 +87,7 @@ ElevenLabs y llega a la app como audio mp3; la app la reproduce en orden. Por de
 El asistente puede trabajar sin que le preguntes: revisa los tickets por su cuenta, deja un resumen y **acciones preparadas
 sin ejecutar** (por ejemplo, subir de prioridad un ticket) para que solo tengas que aprobarlas o descartarlas.
 
+- Usa el modelo `TRIAGE_MODEL` (por defecto `claude-sonnet-5-5`), independiente de `MODEL_DEFAULT` (la conversación): puedes poner un modelo más barato en la conversación y dejar Sonnet para la revisión.
 - Se activa con `TRIAGE_ENABLED=true` y corre a las horas de `TRIAGE_TIMES` (hora de Madrid, por defecto `08:30`). También se
   puede lanzar a mano con `proposals_run` desde la app. Necesita el modelo real (`MODEL_PROVIDER=anthropic`); con el modelo
   guionizado hace una revisión de prueba.
@@ -160,3 +161,10 @@ participantes), roadmaps e hitos, etiquetas, campos personalizados, miembros, in
 informe de horas. Escritura (siempre con confirmación): crear/cambiar tickets, comentar, prioridades, fechas y
 estimación, horas, etiquetas, checklist, campos personalizados, subtareas, participantes, elementos e hitos de roadmap
 y agentes. Contrato en `docs/myraypa-api.md`.
+
+## Dictado en el servidor (ElevenLabs Scribe, opcional)
+
+Con `STT_PROVIDER=elevenlabs` (y `ELEVENLABS_API_KEY`) la app deja de usar el reconocedor de Android, que pita en cada reinicio y
+no está pensado para escuchar de forma continua: captura el micrófono ella misma y el servidor transcribe en directo.
+Variables: `STT_LANGUAGE` (`es`), `STT_SILENCE_SECS` (1,2), `STT_MAX_SECONDS` (45), `ELEVENLABS_STT_URL`. Protocolo en `docs/protocol.md`.
+En la app, el ajuste "Conversación continua" hace que vuelva a escuchar sola tras cada respuesta hasta que haya silencio.

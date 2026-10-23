@@ -25,6 +25,10 @@ export const clientMessage = z.discriminatedUnion('type', [
     type: z.literal('cancel'),
     sessionId,
   }),
+  // Dictado: la app envia audio PCM (16 kHz, 16 bits, mono) en mensajes binarios entre stt_start y stt_stop.
+  z.object({ type: z.literal('stt_start') }),
+  z.object({ type: z.literal('stt_stop') }), // termina y entrega lo dicho hasta ahora
+  z.object({ type: z.literal('stt_cancel') }), // descarta el dictado sin entregar nada
   // Propuestas de la revision automatica (no pertenecen a ninguna conversacion: no llevan sessionId).
   z.object({ type: z.literal('proposals_list') }),
   z.object({ type: z.literal('proposals_run') }),

@@ -5,6 +5,7 @@ import { FakeMyraypa } from './connectors/myraypa/fake.js';
 import { createMyraypaConnector } from './connectors/myraypa/index.js';
 import { FakeGithub, HttpGithub } from './integrations/github.js';
 import { ElevenLabsVoice } from './voice/elevenlabs.js';
+import { ElevenLabsScribe } from './voice/stt.js';
 import { AnthropicModel } from './model/anthropic.js';
 import { ScriptedModel } from './model/scripted.js';
 import { Orchestrator } from './orchestrator.js';
@@ -46,6 +47,18 @@ export function createApp(config, overrides = {}) {
         })
       : null);
 
+  const stt =
+    overrides.stt ??
+    (config.STT_PROVIDER === 'elevenlabs'
+      ? new ElevenLabsScribe({
+          apiKey: config.ELEVENLABS_API_KEY,
+          baseUrl: config.ELEVENLABS_STT_URL,
+          language: config.STT_LANGUAGE,
+          silenceSecs: config.STT_SILENCE_SECS,
+          maxSeconds: config.STT_MAX_SECONDS,
+        })
+      : null);
+
   // Cada sistema nuevo (Salesforce, SAP B1, Google Workspace...) sera otro conector registrado aqui,
   // con las mismas reglas de riesgo, confirmacion y auditoria.
   const registry = new ToolRegistry().registerConnector(createMyraypaConnector({ client: myraypa, github }));
@@ -65,7 +78,7 @@ export function createApp(config, overrides = {}) {
     voice,
     now: overrides.now,
   });
-  const server = createServer({ config, orchestrator, audit, triage, myraypa, auth: overrides.auth });
+  const server = createServer({ config, orchestrator, audit, triage, myraypa, auth: overrides.auth, stt });
   // Se arranca desde index.js (start); en los tests no se programa nada.
   const scheduler = new TriageScheduler({
     times: config.TRIAGE_TIMES,
@@ -75,5 +88,5 @@ export function createApp(config, overrides = {}) {
       server.broadcast(triage.view());
     },
   });
-  return { server, orchestrator, registry, audit, myraypa, github, model, voice, store, triage, scheduler };
+  return { server, orchestrator, registry, audit, myraypa, github, model, voice, stt, store, triage, scheduler };
 }

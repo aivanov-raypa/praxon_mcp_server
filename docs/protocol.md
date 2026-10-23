@@ -27,14 +27,17 @@ conversación, pero **una acción pendiente de confirmar nunca sobrevive a un co
 { "type": "assistant_chunk", "text": "Hay tres tickets urgentes." }
 { "type": "assistant_audio", "text": "Hay tres tickets urgentes.", "format": "mp3", "data": "<base64>" }
 { "type": "assistant_done" }
-{ "type": "confirm_request", "actionId": "a91", "summary": "Voy a cambiar el ticket 214, ...: prioridad de alta a urgente", "audio": { "format": "mp3", "data": "<base64>" } }
+{ "type": "confirm_request", "actionId": "a91", "summary": "Voy a cambiar el ticket 214, ...: prioridad de alta a urgente", "items": ["Cambiar el ticket 214: ..."], "audio": { "format": "mp3", "data": "<base64>" } }
 { "type": "error", "message": "..." }
 ```
 
 - `assistant_chunk`: una o varias frases completas, ya sin markdown, listas para leer en voz alta.
 - `assistant_audio`: la misma frase que un `assistant_chunk`, pero ya sintetizada (ElevenLabs). Llega en orden, y la app
   la reproduce **en lugar de** leer el texto. Si la síntesis de una frase falla, esa frase llega como `assistant_chunk`.
-- `confirm_request`: el campo `audio` (opcional) es la pregunta "`summary`. ¿Confirmas?" ya sintetizada; si falta, la app
+- `confirm_request`: **una sola confirmación cubre todas las escrituras que el modelo pide en el mismo paso** (hasta 25). `confirm` con
+  `accepted: true` las ejecuta todas (cada una se audita por separado) y `accepted: false` las cancela todas. `summary` es lo que se lee en voz
+  alta (corto: "Voy a cambiar 4 tickets: vencimiento el 23 de octubre y prioridad a alta. Tienes la lista en pantalla"); `items` (solo con varias
+  acciones) es la lista completa, una línea por ticket, para mostrar en pantalla y no leer. El campo `audio` (opcional) es la pregunta "`summary`. ¿Confirmas?" ya sintetizada; si falta, la app
   la lee ella. El servidor no ejecuta la acción hasta recibir `confirm` con ese `actionId`,
   en la misma sesión, antes de que caduque (`CONFIRM_TTL_MS`) y una sola vez.
 - `error`: se lee en voz alta. No cierra el turno con `assistant_done`.
@@ -87,3 +90,13 @@ resumen con acciones **preparadas pero sin ejecutar**. Estos mensajes no pertene
   la acción queda `obsoleta`. La ejecución se audita (`via: "proposal"`) y no se hace si la auditoría falla.
 - Por voz también se pueden consultar (`praxon_propuestas_pendientes`) y aplicar (`praxon_aplicar_propuesta`, con la
   confirmación normal de la conversación).
+
+## Dictado (transcripción en el servidor)
+
+Con `STT_PROVIDER=elevenlabs` el servidor transcribe el audio del micrófono con ElevenLabs Scribe (usa `ELEVENLABS_API_KEY`).
+Al conectar el servidor envía `{type:'capabilities', stt:true|false}`; si es `false` (o no llega), la app usa el reconocedor de Android.
+
+- app → servidor: `stt_start`, mensajes **binarios** con audio PCM (16 kHz, 16 bits, little-endian, mono; unos 100 ms cada uno), `stt_stop` (termina y entrega lo dicho hasta ahora) y `stt_cancel` (descarta). Solo hay un dictado activo por conexión; `stt_start` sustituye al anterior.
+- servidor → app: `stt_partial {text}`, `stt_final {text}` (primer texto confirmado; el servidor cierra el dictado), `stt_error {message}`, `stt_ended` (cerrado sin texto).
+- El servidor detecta el final de la frase por silencio (`STT_SILENCE_SECS`, 1,2 s por defecto) y corta el dictado a los `STT_MAX_SECONDS` (45). Tras `stt_final` la app envía `user_text` con el texto, como siempre.
+- Privacidad: mientras la app escucha, el audio sale hacia ElevenLabs. No se guarda audio en el servidor.

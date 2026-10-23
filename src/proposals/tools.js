@@ -5,7 +5,7 @@ import { defineTool } from '../tools/registry.js';
  * Herramientas de voz sobre las propuestas de la revision automatica: consultarlas y aplicar una.
  * Aplicar una pasa por la confirmacion normal de la conversacion, ademas de la comprobacion de que nada ha cambiado.
  */
-export function proposalTools({ store, triage }) {
+export function proposalTools({ store, triage, now = () => new Date() }) {
   const connector = 'praxon';
   const find = (briefingId, actionId) => store.get(briefingId)?.acciones.find((a) => a.id === actionId);
   return [
@@ -39,6 +39,20 @@ export function proposalTools({ store, triage }) {
         const r = await triage.decide({ ...a, accepted: true, user });
         if (!r.ok) throw new Error(r.mensaje);
         return { hecho: true };
+      },
+    }),
+    defineTool({
+      connector,
+      name: 'hora_actual',
+      risk: 'read',
+      description: 'Devuelve la fecha y la hora actuales (hora de Madrid). Úsala cuando necesites saber qué hora es o calcular un plazo respecto a ahora.',
+      input: z.object({}),
+      execute: async () => {
+        const d = now();
+        return {
+          fecha: new Intl.DateTimeFormat('es-ES', { dateStyle: 'full', timeZone: 'Europe/Madrid' }).format(d),
+          hora: new Intl.DateTimeFormat('es-ES', { timeStyle: 'short', timeZone: 'Europe/Madrid' }).format(d),
+        };
       },
     }),
   ];

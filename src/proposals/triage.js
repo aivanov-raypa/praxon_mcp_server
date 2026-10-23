@@ -100,7 +100,7 @@ export class Triage {
           system: buildTriagePrompt({ name: this.#config.ASSISTANT_NAME, user, now: new Date(this.#now()), maxActions: this.#config.TRIAGE_MAX_ACTIONS, allowed: [...this.#allowed()] }),
           messages,
           tools,
-          model: this.#config.MODEL_DEFAULT,
+          model: this.#config.TRIAGE_MODEL ?? this.#config.MODEL_DEFAULT,
           signal: controller.signal,
         })) {
           if (ev.type === 'message') message = ev;

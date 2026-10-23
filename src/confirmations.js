@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 
 /**
- * Confirmacion controlada por el servidor. Una accion de escritura queda pendiente y solo se
+ * Confirmacion controlada por el servidor. Una accion de escritura (o varias del mismo paso, en lote) queda pendiente y solo se
  * ejecuta si llega un `confirm` con el actionId correcto, de la misma sesion, sin caducar y una sola vez.
  * El modelo nunca ve ni genera la confirmacion.
  */
-export function createPending({ toolName, args, summary, ttlMs, now = Date.now(), turn }) {
-  return { actionId: randomUUID(), toolName, args, summary, expiresAt: now + ttlMs, turn };
+export function createPending({ actions, summary, items, ttlMs, now = Date.now(), turn }) {
+  // `actions`: lo que se ejecuta si el usuario confirma ({ index, toolName, args, summary }). Una o varias: se confirman juntas.
+  return { actionId: randomUUID(), actions, summary, items, expiresAt: now + ttlMs, turn };
 }
 
 /** @returns {{ok: true} | {ok: false, reason: 'none'|'mismatch'|'expired'}} */

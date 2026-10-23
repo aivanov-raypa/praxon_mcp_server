@@ -45,6 +45,15 @@ describe('revisión automática', () => {
     expect(names.some((n) => n.startsWith('praxon_'))).toBe(false);
   });
 
+  it('usa el modelo de la revisión, distinto del de la conversación', async () => {
+    const model = stubModel([summary()]);
+    const s = setup();
+    const triage = new Triage({ model, registry: s.registry, audit: s.audit, store: new ProposalStore(null), config: { ...config, MODEL_DEFAULT: 'claude-haiku-5-5', TRIAGE_MODEL: 'claude-sonnet-5-5' }, now: () => Date.UTC(2026, 9, 23, 6, 30) });
+    await triage.run({ user: 'alex' });
+    expect(model.calls[0].model).toBe('claude-sonnet-5-5');
+    expect(loadConfig({ PRAXON_TOKEN: 'token-largo-123456' }).TRIAGE_MODEL).toBe('claude-sonnet-5-5');
+  });
+
   it('rechaza ejecutar una escritura directamente y las herramientas no permitidas para proponer', async () => {
     const model = stubModel(
       [use('myraypa_actualizar_ticket', { ticketId: '214', prioridad: 'alta' }, 'directa')],

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { SentenceChunker } from './chunker.js';
 import { CONFIRMATION_ERRORS, checkConfirmation, createPending } from './confirmations.js';
 import { appendUserText, trimHistory } from './session.js';
+import { MAX_BATCH, resumenDeLote } from './batch.js';
 
 const MAX_RESULT_CHARS = 8000;
 
@@ -86,20 +87,28 @@ export class Orchestrator {
       const pending = session.pending;
       session.pending = null;
       const turn = this.#startTurn(session, pending.turn.requestId, pending.turn.audio);
-      const { assistantContent, toolUses, index, results } = pending.turn;
-      const tu = toolUses[index];
-      await this.#log({ event: 'confirm_result', sessionId: session.id, user: session.user, actionId, tool: pending.toolName, outcome: accepted ? 'accepted' : 'declined' });
+      const { assistantContent, toolUses, results } = pending.turn;
+      await this.#log({
+        event: 'confirm_result',
+        sessionId: session.id,
+        user: session.user,
+        actionId,
+        tool: pending.actions.map((a) => a.toolName).join(','),
+        outcome: accepted ? 'accepted' : 'declined',
+      });
 
-      if (accepted) {
-        results.push(await this.#exec(this.#registry.get(pending.toolName), pending.args, tu, session));
-      } else {
-        results.push({
-          type: 'tool_result',
-          tool_use_id: tu.id,
-          content: JSON.stringify({ cancelada: true, mensaje: 'El usuario ha cancelado la acción. No se ha ejecutado nada.' }),
-        });
+      // Todas las acciones del lote se aceptan o se rechazan a la vez; cada una se ejecuta (y se audita) por separado.
+      for (const a of pending.actions) {
+        const tu = toolUses[a.index];
+        results[a.index] = accepted
+          ? await this.#exec(this.#registry.get(a.toolName), a.args, tu, session)
+          : {
+              type: 'tool_result',
+              tool_use_id: tu.id,
+              content: JSON.stringify({ cancelada: true, mensaje: 'El usuario ha cancelado la acción. No se ha ejecutado nada.' }),
+            };
       }
-      const outcome = await this.#runTools(session, turn, assistantContent, toolUses, index + 1, results, emit);
+      const outcome = this.#finishTools(session, turn, assistantContent, toolUses, results);
       if (outcome === 'done') await this.#loop(session, turn, emit);
       await turn.out;
     });
@@ -182,6 +191,7 @@ export class Orchestrator {
         if (!message) throw new Error('el modelo no devolvió ningún mensaje');
       } catch (err) {
         if (turn.aborted) return;
+        console.error('[modelo]', String(err.message).slice(0, 500));
         await this.#log({ event: 'model_error', sessionId: session.id, message: err.message });
         this.#say(turn, emit, { type: 'error', message: 'No he podido consultar el modelo. Inténtalo de nuevo.' });
         return;
@@ -195,66 +205,93 @@ export class Orchestrator {
         this.#say(turn, emit, { type: 'assistant_done' });
         return;
       }
-      const outcome = await this.#runTools(session, turn, message.content, toolUses, 0, [], emit);
+      const outcome = await this.#runTools(session, turn, message.content, toolUses, emit);
       if (outcome !== 'done') return;
     }
     await this.#log({ event: 'model_error', sessionId: session.id, message: 'demasiadas iteraciones de herramientas' });
     this.#say(turn, emit, { type: 'error', message: 'Me he liado con demasiados pasos. ¿Me lo puedes pedir de otra forma?' });
   }
 
-  /** @returns {'done'|'paused'|'aborted'} */
-  async #runTools(session, turn, assistantContent, toolUses, start, results, emit) {
-    for (let k = start; k < toolUses.length; k++) {
+  /**
+   * Ejecuta las lecturas del mensaje del modelo y reúne las escrituras en UN solo lote pendiente de confirmar:
+   * "pon todos con fecha de hoy y prioridad alta" es una única pregunta, no una por ticket y por cambio.
+   * @returns {'done'|'paused'|'aborted'}
+   */
+  async #runTools(session, turn, assistantContent, toolUses, emit) {
+    const results = new Array(toolUses.length);
+    const batch = [];
+    for (let k = 0; k < toolUses.length; k++) {
       const tu = toolUses[k];
       const tool = this.#registry.get(tu.name);
       if (!tool) {
         await this.#log({ event: 'tool_call', sessionId: session.id, tool: tu.name, ok: false, error: 'herramienta desconocida' });
-        results.push(toolError(tu.id, `La herramienta ${tu.name} no existe.`));
+        results[k] = toolError(tu.id, `La herramienta ${tu.name} no existe.`);
         continue;
       }
       const parsed = tool.input.safeParse(tu.input ?? {});
       if (!parsed.success) {
         const detail = parsed.error.issues.map((i) => `${i.path.join('.') || 'entrada'}: ${i.message}`).join('; ');
         await this.#log({ event: 'tool_call', sessionId: session.id, tool: tool.name, ok: false, error: `parámetros no válidos: ${detail}` });
-        results.push(toolError(tu.id, `Parámetros no válidos (${detail}).`));
+        results[k] = toolError(tu.id, `Parámetros no válidos (${detail}).`);
         continue;
       }
 
       if (tool.risk === 'write') {
-        let summary;
-        try {
-          summary = await tool.summarize(parsed.data, { session, user: session.user });
-        } catch (err) {
-          await this.#log({ event: 'tool_call', sessionId: session.id, tool: tool.name, ok: false, error: err.message });
-          results.push(toolError(tu.id, err.message));
+        if (batch.length >= MAX_BATCH) {
+          results[k] = toolError(tu.id, `Demasiados cambios a la vez (máximo ${MAX_BATCH} por confirmación). Este no se ha hecho: propónlo en el siguiente paso.`);
           continue;
         }
-        if (turn.aborted) return 'aborted';
-        const pending = createPending({
-          toolName: tool.name,
-          args: parsed.data,
-          summary,
-          ttlMs: this.#config.CONFIRM_TTL_MS,
-          now: this.#now(),
-          turn: { assistantContent, toolUses, index: k, results, requestId: turn.requestId, audio: turn.audio },
-        });
-        session.pending = pending;
-        await this.#log({ event: 'confirm_requested', sessionId: session.id, user: session.user, actionId: pending.actionId, tool: tool.name, args: parsed.data, summary });
-        // La pregunta se lee con la misma voz que el resto; si no hay audio, la app la lee con la de Android.
-        const spoken = turn.audio && this.#voice ? await this.#voice.synthesize(`${summary}. ¿Confirmas?`, { signal: turn.signal }).catch(() => null) : null;
-        this.#say(turn, emit, {
-          type: 'confirm_request',
-          actionId: pending.actionId,
-          summary,
-          ...(spoken && { audio: { format: spoken.format, data: spoken.data } }),
-        });
-        return 'paused';
+        try {
+          batch.push({ index: k, toolName: tool.name, args: parsed.data, summary: await tool.summarize(parsed.data, { session, user: session.user }) });
+        } catch (err) {
+          await this.#log({ event: 'tool_call', sessionId: session.id, tool: tool.name, ok: false, error: err.message });
+          results[k] = toolError(tu.id, err.message);
+        }
+        continue;
       }
 
-      results.push(await this.#exec(tool, parsed.data, tu, session));
+      results[k] = await this.#exec(tool, parsed.data, tu, session);
     }
-    // Todas las herramientas del mensaje tienen resultado: el historial se actualiza de una vez.
-    session.history.push({ role: 'assistant', content: assistantContent }, { role: 'user', content: results });
+    if (turn.aborted) return 'aborted';
+
+    if (batch.length) {
+      const { summary, items } = resumenDeLote(batch.map((a) => a.summary), new Date(this.#now()));
+      const pending = createPending({
+        actions: batch,
+        summary,
+        items,
+        ttlMs: this.#config.CONFIRM_TTL_MS,
+        now: this.#now(),
+        turn: { assistantContent, toolUses, results, requestId: turn.requestId, audio: turn.audio },
+      });
+      session.pending = pending;
+      await this.#log({
+        event: 'confirm_requested',
+        sessionId: session.id,
+        user: session.user,
+        actionId: pending.actionId,
+        tool: batch.map((a) => a.toolName).join(','),
+        args: batch.length === 1 ? batch[0].args : undefined,
+        actions: batch.length > 1 ? batch.map((a) => ({ tool: a.toolName, args: a.args, summary: a.summary })) : undefined,
+        summary,
+      });
+      // La pregunta se lee con la misma voz que el resto; si no hay audio, la app la lee con la de Android.
+      const spoken = turn.audio && this.#voice ? await this.#voice.synthesize(`${summary}. ¿Confirmas?`, { signal: turn.signal }).catch(() => null) : null;
+      this.#say(turn, emit, {
+        type: 'confirm_request',
+        actionId: pending.actionId,
+        summary,
+        ...(items && { items }),
+        ...(spoken && { audio: { format: spoken.format, data: spoken.data } }),
+      });
+      return 'paused';
+    }
+    return this.#finishTools(session, turn, assistantContent, toolUses, results);
+  }
+
+  /** Todas las herramientas del mensaje tienen resultado: el historial se actualiza de una vez, en el orden de las llamadas. */
+  #finishTools(session, turn, assistantContent, toolUses, results) {
+    session.history.push({ role: 'assistant', content: assistantContent }, { role: 'user', content: toolUses.map((_, i) => results[i]) });
     return turn.aborted ? 'aborted' : 'done';
   }
 
