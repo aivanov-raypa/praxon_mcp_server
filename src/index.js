@@ -11,7 +11,7 @@ try {
   process.exit(1);
 }
 
-const { server, registry, scheduler } = createApp(config);
+const { server, registry, scheduler, watcher } = createApp(config);
 const port = await server.listen();
 
 console.log(`${config.ASSISTANT_NAME}: servidor escuchando en el puerto ${port}`);
@@ -33,6 +33,10 @@ if (!config.ALLOW_LEGACY_TOKEN) {
 if (config.TRIAGE_ENABLED) {
   scheduler.start();
   console.log(`Revisión automática: cada día a las ${config.TRIAGE_TIMES.join(', ')} (hora de Madrid). Las acciones solo se ejecutan si las apruebas.`);
+  if (config.TRIAGE_WATCH) {
+    watcher.start();
+    console.log(`Tickets nuevos: se revisan solos, mirando MyRAYPA cada ${config.TRIAGE_WATCH_MINUTES} min (un ticket se revisa tras ${config.TRIAGE_WATCH_SETTLE_MINUTES} min desde su creación).`);
+  }
 } else {
   console.log('Revisión automática desactivada (TRIAGE_ENABLED=true para activarla; también se puede lanzar a mano desde la app).');
 }
@@ -41,6 +45,7 @@ if (config.MODEL_PROVIDER === 'scripted') console.log('Aviso: modelo guionizado 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, async () => {
     scheduler.stop();
+    watcher.stop();
     await server.close();
     process.exit(0);
   });

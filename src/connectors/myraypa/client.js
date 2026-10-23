@@ -97,8 +97,8 @@ export class HttpMyraypaClient {
   listProjects() {
     return this.#request('GET', ROUTES.projects());
   }
-  listTickets({ proyectoId, estado, prioridad, asignado, texto, mostrar, limit } = {}) {
-    return this.#request('GET', ROUTES.tickets(), { query: { proyecto: proyectoId, estado, prioridad, asignado, texto, mostrar, limit } });
+  listTickets({ proyectoId, estado, prioridad, asignado, texto, mostrar, limit, creadosDesde } = {}) {
+    return this.#request('GET', ROUTES.tickets(), { query: { proyecto: proyectoId, estado, prioridad, asignado, texto, mostrar, limit, creadosDesde } });
   }
   getTicket(id) {
     return this.#request('GET', ROUTES.ticket(id));

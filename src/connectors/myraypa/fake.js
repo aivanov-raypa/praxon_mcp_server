@@ -162,27 +162,29 @@ export class FakeMyraypa {
       proyecto: p.nombre,
       proyectoId: p.id,
       vencimiento: tk.vencimiento ?? null,
+      creado: tk.creado ?? null,
     };
   }
 
   async listProjects() {
-    return this.proyectos.map(({ id, nombre, autonomia, repo, ramaBase, estados }) => ({ id, nombre, autonomia, repo, ramaBase, estados }));
+    return this.proyectos.map(({ id, nombre, autonomia, repo, ramaBase, estados, codigo = true }) => ({ id, nombre, autonomia, repo, ramaBase, codigo, estados }));
   }
 
-  async listTickets({ proyectoId, estado, prioridad, asignado, texto, mostrar = 'abiertos', limit = 5 } = {}) {
+  async listTickets({ proyectoId, estado, prioridad, asignado, texto, mostrar = 'abiertos', limit = 5, creadosDesde } = {}) {
     if (proyectoId) this.#proyecto(proyectoId);
     if (!['abiertos', 'completados', 'todos'].includes(mostrar)) throw new MyraypaError('mostrar debe ser abiertos, completados o todos.', 400);
     const prio = prioridad ? parsePrioridad(prioridad) : null;
     const palabras = norm(texto).split(/\s+/).filter(Boolean);
     const found = this.tickets
       .filter((tk) => !proyectoId || tk.proyectoId === proyectoId)
+      .filter((tk) => !creadosDesde || (tk.creado && Date.parse(tk.creado) >= Date.parse(creadosDesde)))
       .filter((tk) => mostrar === 'todos' || tk.completado === (mostrar === 'completados'))
       .filter((tk) => !estado || tk.estadoId === this.#estado(this.#proyecto(tk.proyectoId), estado).id)
       .filter((tk) => !prio || tk.prioridad === prio)
       .filter((tk) => !asignado || norm(tk.asignado).includes(norm(asignado)))
       .filter((tk) => palabras.every((w) => norm(`${tk.titulo} ${tk.descripcion}`).split(/\W+/).includes(w)))
-      .sort((a, b) => RANK[b.prioridad] - RANK[a.prioridad] || Number(a.id) - Number(b.id));
-    return { total: found.length, tickets: found.slice(0, limit).map((tk) => this.#vista(tk)) };
+      .sort((a, b) => (creadosDesde ? Date.parse(a.creado) - Date.parse(b.creado) : RANK[b.prioridad] - RANK[a.prioridad]) || Number(a.id) - Number(b.id));
+    return { total: found.length, tickets: found.slice(0, creadosDesde ? Math.max(limit, 50) : limit).map((tk) => this.#vista(tk)) };
   }
 
   async getTicket(id) {
@@ -215,7 +217,7 @@ export class FakeMyraypa {
   async createTicket({ proyectoId, titulo, descripcion = '', prioridad = 'media', asignado = '' }, origin) {
     const p = this.#proyecto(proyectoId);
     this.#requiere(p, 'tickets');
-    const tk = { id: String(this.#nextTicket++), proyectoId, titulo, descripcion, estadoId: p.estados[0].id, prioridad: parsePrioridad(prioridad), completado: false, asignado, comentarios: [] };
+    const tk = { id: String(this.#nextTicket++), proyectoId, titulo, descripcion, estadoId: p.estados[0].id, prioridad: parsePrioridad(prioridad), completado: false, asignado, comentarios: [], creado: new Date().toISOString() };
     this.tickets.push(tk);
     this.historial.push({ ticketId: tk.id, accion: 'crear', origin });
     return this.#vista(tk);

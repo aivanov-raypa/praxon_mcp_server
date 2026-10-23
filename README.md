@@ -62,6 +62,9 @@ Para configurarlo de verdad, copia `.env.example` a `.env`:
 | `MODEL_PROVIDER=anthropic`, `ANTHROPIC_API_KEY`, `MODEL_DEFAULT` | Modelo real |
 | `MYRAYPA_MODE=http`, `MYRAYPA_API_URL`, `MYRAYPA_API_TOKEN` | API real de MyRAYPA (ver `docs/myraypa-api.md`) |
 | `GITHUB_MODE=http`, `GITHUB_TOKEN`, `GITHUB_WORKFLOW_FILE` | Lanzar agentes de verdad |
+| `GITHUB_READ_TOKEN` | Token de grano fino solo lectura (Contents, Pull requests, Metadata) para que la revisión y la conversación consulten el código del repositorio de cada proyecto (`github_buscar_codigo`, `github_leer_codigo`, `github_commits_recientes`, `github_pull_requests`). Sin él no hay consulta de código |
+| `TRIAGE_WATCH` (`true`), `TRIAGE_WATCH_MINUTES` (5), `TRIAGE_WATCH_SETTLE_MINUTES` (3), `TRIAGE_WATCH_BATCH` (5), `TRIAGE_WATCH_FROM`, `REVIEWED_PATH` | Vigilante de tickets nuevos (con `TRIAGE_ENABLED=true`): cada `TRIAGE_WATCH_MINUTES` pregunta a MyRAYPA por los tickets creados desde la marca de corte (por defecto, el primer arranque; `TRIAGE_WATCH_FROM` la fija) y revisa solo los que llevan `TRIAGE_WATCH_SETTLE_MINUTES` creados, en lotes de `TRIAGE_WATCH_BATCH`. Solo deja aviso si hay algo que aprobar |
+| `TRIAGE_CODE_MAX_CALLS` | Consultas de código que puede hacer cada revisión (12 por defecto; 0 las desactiva) |
 
 Con el modelo guionizado puedes probar: "¿qué hay abierto en calibraciones?" y "pasa el de los faltantes a urgente"
 (pide confirmación; di "confirmo" o "cancela").

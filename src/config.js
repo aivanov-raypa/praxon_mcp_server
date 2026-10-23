@@ -23,6 +23,9 @@ const schema = z
     GITHUB_MODE: z.enum(['fake', 'http']).default('fake'),
     GITHUB_TOKEN: z.string().optional(),
     GITHUB_WORKFLOW_FILE: z.string().default('praxon-agent.yml'),
+    // Lectura del código de los proyectos (revisión y conversación). Token de grano fino SOLO de lectura
+    // (Contents, Pull requests, Metadata), distinto de GITHUB_TOKEN. Sin él, el asistente no consulta código.
+    GITHUB_READ_TOKEN: z.string().optional(),
 
     VOICE_PROVIDER: z.enum(['none', 'elevenlabs']).default('none'),
     ELEVENLABS_API_KEY: z.string().optional(),
@@ -52,7 +55,18 @@ const schema = z
       .transform((v) => v.split(',').map((x) => x.trim()).filter(Boolean)),
     // Modelo de la revisión automática (analiza muchos tickets: conviene el más capaz). La conversación usa MODEL_DEFAULT.
     TRIAGE_MODEL: z.string().default('claude-sonnet-5-5'),
-    TRIAGE_MAX_STEPS: z.coerce.number().int().positive().default(14),
+    // Vigilante de tickets nuevos: sondea MyRAYPA y revisa solo los creados desde la última vez (con TRIAGE_ENABLED=true).
+    TRIAGE_WATCH: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+    TRIAGE_WATCH_MINUTES: z.coerce.number().min(1).default(5),
+    // Un ticket se revisa cuando lleva este tiempo creado (por si se edita justo después de crearlo).
+    TRIAGE_WATCH_SETTLE_MINUTES: z.coerce.number().min(0).default(3),
+    TRIAGE_WATCH_BATCH: z.coerce.number().int().positive().default(5),
+    // Fecha ISO desde la que revisar la primera vez (si no, desde que arranca por primera vez).
+    TRIAGE_WATCH_FROM: z.string().optional(),
+    REVIEWED_PATH: z.string().default('./data/reviewed.json'),
+    TRIAGE_MAX_STEPS: z.coerce.number().int().positive().default(24),
+    // Consultas de código (buscar, leer, commits, PRs) que puede hacer la revisión en cada pasada.
+    TRIAGE_CODE_MAX_CALLS: z.coerce.number().int().min(0).default(12),
     TRIAGE_MAX_ACTIONS: z.coerce.number().int().positive().default(10),
     TRIAGE_TIMEOUT_MS: z.coerce.number().int().positive().default(180_000),
     PROPOSAL_TTL_HOURS: z.coerce.number().positive().default(48),

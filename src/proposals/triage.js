@@ -78,7 +78,7 @@ export class Triage {
   }
 
   /** @returns {Promise<object>} la revision creada, o { omitida } si ya habia una en curso. */
-  async run({ user, trigger = 'manual' }) {
+  async run({ user, trigger = 'manual', focus = null }) {
     if (this.#running) return { omitida: 'Ya hay una revisión en curso.' };
     this.#running = true;
     const id = randomUUID();
@@ -86,9 +86,13 @@ export class Triage {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.#config.TRIAGE_TIMEOUT_MS);
     try {
-      const reads = (t) => t.risk === 'read' && t.connector === 'myraypa';
-      const tools = [...this.#registry.forModel(reads), ...INTERNAL_TOOLS];
-      const messages = [{ role: 'user', content: 'Haz la revisión ahora.' }];
+      const reads = (t) => t.risk === 'read' && (t.connector === 'myraypa' || t.connector === 'github');
+      const maxCode = this.#config.TRIAGE_CODE_MAX_CALLS ?? 12;
+      const code = maxCode > 0 && this.#registry.list().some((t) => t.connector === 'github');
+      const offered = (t) => reads(t) && (code || t.connector !== 'github');
+      const tools = [...this.#registry.forModel(offered), ...INTERNAL_TOOLS];
+      let codeCalls = 0;
+      const messages = [{ role: 'user', content: focus ? 'Revisa ahora los tickets nuevos indicados.' : 'Haz la revisión ahora.' }];
       const session = { id: `revision-${id}`, user };
       const acciones = [];
       let resumen = '';
@@ -97,7 +101,7 @@ export class Triage {
       for (let step = 0; step < this.#config.TRIAGE_MAX_STEPS && !finished; step++) {
         let message;
         for await (const ev of this.#model.stream({
-          system: buildTriagePrompt({ name: this.#config.ASSISTANT_NAME, user, now: new Date(this.#now()), maxActions: this.#config.TRIAGE_MAX_ACTIONS, allowed: [...this.#allowed()] }),
+          system: buildTriagePrompt({ name: this.#config.ASSISTANT_NAME, user, now: new Date(this.#now()), maxActions: this.#config.TRIAGE_MAX_ACTIONS, allowed: [...this.#allowed()], code: code ? maxCode : 0, focus }),
           messages,
           tools,
           model: this.#config.TRIAGE_MODEL ?? this.#config.MODEL_DEFAULT,
@@ -125,13 +129,17 @@ export class Triage {
             results.push(result(tu.id, ...(await this.#propose(tu.input, acciones, session))));
           } else {
             const tool = this.#registry.get(tu.name);
-            if (!tool || !reads(tool)) {
+            if (!tool || !offered(tool)) {
               results.push(result(tu.id, 'Esa herramienta no está disponible en la revisión. Solo puedes consultar y proponer acciones.', true));
               continue;
             }
             const parsed = tool.input.safeParse(tu.input ?? {});
             if (!parsed.success) {
               results.push(result(tu.id, `Parámetros no válidos (${parsed.error.issues.map((i) => i.message).join('; ')}).`, true));
+              continue;
+            }
+            if (tool.connector === 'github' && ++codeCalls > maxCode) {
+              results.push(result(tu.id, `Has llegado al límite de ${maxCode} consultas de código en esta revisión. Continúa solo con los datos que ya tienes.`, true));
               continue;
             }
             try {
@@ -146,8 +154,9 @@ export class Triage {
       }
 
       const briefing = { id, createdAt: new Date(started).toISOString(), trigger, resumen, acciones };
-      if (resumen || acciones.length) await this.#store.add(briefing);
-      await this.#log({ event: 'triage_run', briefingId: id, trigger, acciones: acciones.length, ms: this.#now() - started });
+      // En la revisión de tickets nuevos solo se guarda si hay algo que aprobar: así no se llena la bandeja de avisos vacíos.
+      if (focus ? acciones.length : resumen || acciones.length) await this.#store.add(briefing);
+      await this.#log({ event: 'triage_run', briefingId: id, trigger, acciones: acciones.length, ...(focus && { tickets: focus.map((f) => f.id) }), ms: this.#now() - started });
       return briefing;
     } catch (err) {
       await this.#log({ event: 'triage_error', trigger, message: err.message });
@@ -156,6 +165,11 @@ export class Triage {
       clearTimeout(timer);
       this.#running = false;
     }
+  }
+
+  /** Revisa solo estos tickets recién creados: [{ id, titulo, proyecto }]. */
+  runTickets({ user, tickets, trigger = 'nuevo' }) {
+    return this.run({ user, trigger, focus: tickets });
   }
 
   /** Valida y guarda una propuesta. Devuelve [mensaje para el modelo, esError]. */

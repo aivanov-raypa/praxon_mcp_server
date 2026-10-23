@@ -4,6 +4,8 @@ import { HttpMyraypaClient } from './connectors/myraypa/client.js';
 import { FakeMyraypa } from './connectors/myraypa/fake.js';
 import { createMyraypaConnector } from './connectors/myraypa/index.js';
 import { FakeGithub, HttpGithub } from './integrations/github.js';
+import { HttpGithubReader } from './integrations/github-read.js';
+import { createGithubConnector } from './connectors/github/index.js';
 import { ElevenLabsVoice } from './voice/elevenlabs.js';
 import { ElevenLabsScribe } from './voice/stt.js';
 import { AnthropicModel } from './model/anthropic.js';
@@ -14,6 +16,8 @@ import { ToolRegistry } from './tools/registry.js';
 import { ProposalStore } from './proposals/store.js';
 import { Triage } from './proposals/triage.js';
 import { TriageScheduler } from './proposals/scheduler.js';
+import { ReviewedStore } from './proposals/reviewed.js';
+import { TicketWatcher } from './proposals/watcher.js';
 import { proposalTools } from './proposals/tools.js';
 
 /** Monta todas las piezas segun la configuracion. Los `overrides` permiten sustituirlas en los tests. */
@@ -28,6 +32,7 @@ export function createApp(config, overrides = {}) {
   const github =
     overrides.github ??
     (config.GITHUB_MODE === 'http' ? new HttpGithub({ token: config.GITHUB_TOKEN, workflowFile: config.GITHUB_WORKFLOW_FILE }) : new FakeGithub());
+  const githubReader = overrides.githubReader ?? (config.GITHUB_READ_TOKEN ? new HttpGithubReader({ token: config.GITHUB_READ_TOKEN }) : null);
   const model =
     overrides.model ??
     (config.MODEL_PROVIDER === 'anthropic'
@@ -62,6 +67,7 @@ export function createApp(config, overrides = {}) {
   // Cada sistema nuevo (Salesforce, SAP B1, Google Workspace...) sera otro conector registrado aqui,
   // con las mismas reglas de riesgo, confirmacion y auditoria.
   const registry = new ToolRegistry().registerConnector(createMyraypaConnector({ client: myraypa, github }));
+  if (githubReader) registry.registerConnector(createGithubConnector({ client: myraypa, reader: githubReader }));
 
   // Revision automatica: el asistente analiza por su cuenta y deja propuestas; solo se ejecutan si el usuario las aprueba.
   const store = overrides.proposalStore ?? new ProposalStore(config.PROPOSALS_PATH);
@@ -88,5 +94,8 @@ export function createApp(config, overrides = {}) {
       server.broadcast(triage.view());
     },
   });
-  return { server, orchestrator, registry, audit, myraypa, github, model, voice, stt, store, triage, scheduler };
+  // Tickets nuevos: sondeo periódico a MyRAYPA (se arranca desde index.js). La marca de corte se crea al construirlo.
+  const reviewed = overrides.reviewed ?? new ReviewedStore(config.REVIEWED_PATH, { from: config.TRIAGE_WATCH_FROM, now: overrides.now });
+  const watcher = new TicketWatcher({ myraypa, triage, reviewed, config, now: overrides.now, onBriefing: () => server.broadcast(triage.view()) });
+  return { server, orchestrator, registry, audit, myraypa, github, githubReader, model, voice, stt, store, triage, scheduler, watcher, reviewed };
 }

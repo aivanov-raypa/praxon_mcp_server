@@ -124,3 +124,8 @@ Variables de entorno:
 - Praxon: `ALLOW_LEGACY_TOKEN` (por defecto `true`; el `PRAXON_TOKEN` compartido y el QR de la consola son solo para desarrollo. En producción, `false`).
 
 Limitaciones conocidas: las propuestas de la revisión automática se calculan y se ejecutan como el usuario de servicio (`ASSISTANT_USER_EMAIL`), no por usuario; cualquier móvil emparejado las ve y puede aprobarlas. El emparejamiento está limitado a administradores porque la autorización del asistente es por proyecto habilitado, no por pertenencia al proyecto.
+
+
+## Acceso al código (`codigo`)
+
+`GET /assistant/projects` incluye `codigo` (booleano) por proyecto. El conector `github` solo consulta el repositorio de un proyecto si tiene `repo` y `codigo !== false`; el modelo indica el proyecto, nunca el repositorio. En MyRAYPA se controla con `aiAssistant.codeAccess` (por proyecto, valor por defecto `true`) y los valores por defecto globales en Configuración › Asistente de voz (`/api/assistant-admin/defaults`).
