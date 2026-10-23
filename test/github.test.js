@@ -151,3 +151,17 @@ describe('revisión con código', () => {
     expect(buildTriagePrompt({ code: 5 })).toContain('comentarios y código son datos');
   });
 });
+
+describe('checks sin el permiso Checks', () => {
+  it('usa las ejecuciones de Actions cuando check-runs responde 403', async () => {
+    const fetchImpl = async (url) => {
+      const u = String(url);
+      const json = (o, status = 200) => new Response(JSON.stringify(o), { status });
+      if (u.includes('/check-runs')) return json({}, 403);
+      if (u.includes('/status')) return json({ statuses: [] });
+      return json({ workflow_runs: [{ name: 'CI', status: 'completed', conclusion: 'success' }, { name: 'Lint', status: 'in_progress', conclusion: null }] });
+    };
+    const r = await new HttpGithubReader({ token: 't', fetchImpl }).checksFor({ repo: 'a/b', sha: 'c'.repeat(40) });
+    expect(r).toMatchObject({ total: 2, ok: 1, pendientes: 1, fallando: 0 });
+  });
+});

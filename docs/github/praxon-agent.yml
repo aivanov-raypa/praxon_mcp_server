@@ -39,6 +39,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  id-token: write # la acción de Claude lo pide para validar la ejecución (OIDC)
 
 concurrency:
   group: praxon-agent-${{ inputs.runId }}
@@ -68,6 +69,8 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          show_full_output: true # temporal: para ver el motivo si falla; quitar cuando funcione
           prompt: |
             Eres el agente de desarrollo de RAYPA. Trabaja en este repositorio para resolver el siguiente ticket de MyRAYPA.
 
@@ -87,6 +90,7 @@ jobs:
               concreta que necesitas, y no cambies código.
           claude_args: |
             --max-turns 40
+            --model claude-sonnet-5-5
             --allowedTools "Read,Glob,Grep,Edit,Write,Bash(npm test:*),Bash(npm run lint:*),Bash(npm run test:*),Bash(npm ci:*),Bash(npm install:*)"
 
       - name: Commit, push y pull request

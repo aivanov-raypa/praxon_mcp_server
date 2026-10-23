@@ -160,17 +160,30 @@ export class HttpGithubReader {
     };
   }
 
-  /** Resumen de checks de un commit (check runs de Actions y estados clasicos). */
+  /**
+   * Resumen de checks de un commit. Los tokens de grano fino no tienen el permiso "Checks", asi que se usan las
+   * ejecuciones de Actions de ese commit (permiso Actions) y los estados clasicos (Commit statuses). Si el token si
+   * puede leer check runs, se prefieren.
+   */
   async checksFor({ repo, sha }) {
     checkRepo(repo);
-    const [runs, st] = await Promise.all([
+    const [runs, st, actions] = await Promise.allSettled([
       this.#get(`/repos/${repo}/commits/${sha}/check-runs`, { per_page: 50 }),
       this.#get(`/repos/${repo}/commits/${sha}/status`),
+      this.#get(`/repos/${repo}/actions/runs`, { head_sha: sha, per_page: 30 }),
     ]);
-    const items = [
-      ...(runs.check_runs ?? []).map((c) => ({ nombre: c.name, estado: c.status !== 'completed' ? 'pendiente' : ['success', 'neutral', 'skipped'].includes(c.conclusion) ? 'ok' : 'fallo' })),
-      ...(st.statuses ?? []).map((c) => ({ nombre: c.context, estado: c.state === 'success' ? 'ok' : c.state === 'pending' ? 'pendiente' : 'fallo' })),
-    ];
+    if (runs.status === 'rejected' && st.status === 'rejected' && actions.status === 'rejected') throw actions.reason;
+    const items = [];
+    if (runs.status === 'fulfilled') {
+      for (const c of runs.value.check_runs ?? []) items.push({ nombre: c.name, estado: c.status !== 'completed' ? 'pendiente' : ['success', 'neutral', 'skipped'].includes(c.conclusion) ? 'ok' : 'fallo' });
+    } else if (actions.status === 'fulfilled') {
+      for (const r of actions.value.workflow_runs ?? []) {
+        items.push({ nombre: r.name, estado: r.status !== 'completed' ? 'pendiente' : ['success', 'neutral', 'skipped'].includes(r.conclusion) ? 'ok' : 'fallo' });
+      }
+    }
+    if (st.status === 'fulfilled') {
+      for (const c of st.value.statuses ?? []) items.push({ nombre: c.context, estado: c.state === 'success' ? 'ok' : c.state === 'pending' ? 'pendiente' : 'fallo' });
+    }
     return {
       total: items.length,
       ok: items.filter((i) => i.estado === 'ok').length,
