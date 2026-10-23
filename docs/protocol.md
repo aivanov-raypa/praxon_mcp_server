@@ -100,3 +100,14 @@ Al conectar el servidor envía `{type:'capabilities', stt:true|false}`; si es `f
 - servidor → app: `stt_partial {text}`, `stt_final {text}` (primer texto confirmado; el servidor cierra el dictado), `stt_error {message}`, `stt_ended` (cerrado sin texto).
 - El servidor detecta el final de la frase por silencio (`STT_SILENCE_SECS`, 1,2 s por defecto) y corta el dictado a los `STT_MAX_SECONDS` (45). Tras `stt_final` la app envía `user_text` con el texto, como siempre.
 - Privacidad: mientras la app escucha, el audio sale hacia ElevenLabs. No se guarda audio en el servidor.
+
+
+## Frases propias de la app (`speak`)
+
+Para que los avisos y frases que genera la propia app ("No te he entendido…", "Tienes 2 propuestas pendientes…") suenen con la misma voz que las respuestas, la app las pide al servidor:
+
+```json
+{ "type": "speak", "id": "uuid", "text": "No te he entendido. Di confirmo o cancela." }
+```
+
+El servidor responde `{ "type": "speech", "id", "text", "format": "mp3", "data": "<base64>" }`. Si no hay voz configurada, falla la síntesis o la conexión supera 20 frases por minuto, responde sin `format` ni `data` y la app usa la voz de Android. `capabilities` incluye `voice: true|false`. Las frases fijas se guardan en memoria en el servidor para no sintetizarlas cada vez.

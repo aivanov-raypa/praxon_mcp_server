@@ -47,7 +47,21 @@ export function createServer({
   auth = new DeviceAuth({ config, myraypa }),
   redeemLimiter = new RateLimiter(),
   stt = null,
+  voice = null,
 }) {
+  // Las frases fijas de la app se repiten (p. ej. "No te he entendido. Di confirmo o cancela."): se guardan para no pagar la síntesis cada vez.
+  const phrases = new Map();
+  async function synthesizePhrase(text) {
+    const hit = phrases.get(text);
+    if (hit) return hit;
+    const audio = await voice.synthesize(text).catch(() => null);
+    if (audio && text.length <= 160) {
+      phrases.set(text, audio);
+      if (phrases.size > 60) phrases.delete(phrases.keys().next().value);
+    }
+    return audio;
+  }
+
   const sendJson = (res, status, body) => res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify(body));
 
   /** POST /pair/redeem { code, deviceName }: canjea el código del QR de MyRAYPA por el token del dispositivo. */
@@ -143,12 +157,13 @@ export function createServer({
     const identity = req.praxonIdentity;
     ws.identity = identity;
     let dictation = null; // transcripción en curso de esta conexión
+    let speakTimes = []; // límite de frases por minuto de esta conexión
     const stopDictation = () => {
       const d = dictation;
       dictation = null; // antes de cerrar: así onClose no avisa a la app de un cierre que provocamos nosotros
       d?.close();
     };
-    emit({ type: 'capabilities', stt: Boolean(stt) });
+    emit({ type: 'capabilities', stt: Boolean(stt), voice: Boolean(voice) });
     log({ event: 'connection_open', user: identity.user, deviceId: identity.deviceId, remote: req.socket.remoteAddress });
 
     ws.on('message', (raw, isBinary) => {
@@ -186,6 +201,20 @@ export function createServer({
             },
           }));
         }
+        return;
+      }
+      if (msg.type === 'speak') {
+        const now = Date.now();
+        speakTimes = speakTimes.filter((t) => now - t < 60_000);
+        // Sin voz, o pasado el límite: se responde sin audio y la app usa la voz de Android.
+        if (!voice || speakTimes.length >= 20) {
+          emit({ type: 'speech', id: msg.id, text: msg.text });
+          return;
+        }
+        speakTimes.push(now);
+        synthesizePhrase(msg.text).then((a) => {
+          if (ws.readyState === ws.OPEN) emit({ type: 'speech', id: msg.id, text: msg.text, ...(a && { format: a.format, data: a.data }) });
+        });
         return;
       }
       if (msg.type.startsWith('proposal')) {

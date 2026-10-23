@@ -29,6 +29,8 @@ export const clientMessage = z.discriminatedUnion('type', [
   z.object({ type: z.literal('stt_start') }),
   z.object({ type: z.literal('stt_stop') }), // termina y entrega lo dicho hasta ahora
   z.object({ type: z.literal('stt_cancel') }), // descarta el dictado sin entregar nada
+  // Frases propias de la app ("No te he entendido…", avisos): el servidor las sintetiza con la voz de ElevenLabs.
+  z.object({ type: z.literal('speak'), id: z.string().min(1).max(64), text: z.string().trim().min(1).max(300) }),
   // Propuestas de la revision automatica (no pertenecen a ninguna conversacion: no llevan sessionId).
   z.object({ type: z.literal('proposals_list') }),
   z.object({ type: z.literal('proposals_run') }),

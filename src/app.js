@@ -84,7 +84,7 @@ export function createApp(config, overrides = {}) {
     voice,
     now: overrides.now,
   });
-  const server = createServer({ config, orchestrator, audit, triage, myraypa, auth: overrides.auth, stt });
+  const server = createServer({ config, orchestrator, audit, triage, myraypa, auth: overrides.auth, stt, voice });
   // Se arranca desde index.js (start); en los tests no se programa nada.
   const scheduler = new TriageScheduler({
     times: config.TRIAGE_TIMES,
