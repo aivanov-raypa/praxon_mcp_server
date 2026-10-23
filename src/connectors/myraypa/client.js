@@ -17,6 +17,8 @@ export const ROUTES = {
   summary: (id) => `/assistant/projects/${id}/summary`,
   priorities: (id) => `/assistant/projects/${id}/priorities`,
   runs: () => '/assistant/agent-runs',
+  runsList: () => '/assistant/agent-runs/lista',
+  run: (id) => `/assistant/agent-runs/${id}`,
   cancelRun: (id) => `/assistant/agent-runs/${id}/cancel`,
   roadmaps: () => '/assistant/roadmaps',
   roadmap: (id) => `/assistant/roadmaps/${id}`,
@@ -198,6 +200,15 @@ export class HttpMyraypaClient {
   }
   updateProjectMilestone(proyectoId, hitoId, cambios, origin) {
     return this.#request('PATCH', ROUTES.projectMilestone(proyectoId, hitoId), { body: { ...cambios, origin } });
+  }
+  /** Agentes abiertos (en cola, en curso, bloqueados o pendientes de revision) o los estados indicados. */
+  async listAgentRuns({ estados, limit } = {}) {
+    const r = await this.#request('GET', ROUTES.runsList(), { query: { estados: estados?.join(','), limit } });
+    return Array.isArray(r) ? r : [];
+  }
+  /** Avance del agente: estado, rama, prUrl, githubRunId, pregunta. */
+  patchAgentRun(runId, cambios) {
+    return this.#request('PATCH', ROUTES.run(runId), { body: cambios });
   }
   cancelAgentRun(runId, origin) {
     return this.#request('POST', ROUTES.cancelRun(runId), { body: { origin } });

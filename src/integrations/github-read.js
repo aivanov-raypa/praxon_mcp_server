@@ -117,6 +117,82 @@ export class HttpGithubReader {
       actualizado: p.updated_at,
     }));
   }
+
+  // ── Seguimiento de agentes (solo lectura): ejecuciones del workflow, PR, checks y diff ──
+
+  /** Ejecuciones recientes del workflow del agente. `titulo` es el run-name ("praxon ticket=.. run=.."). */
+  async listWorkflowRuns({ repo, workflowFile = 'praxon-agent.yml', limit = 30 }) {
+    checkRepo(repo);
+    const data = await this.#get(`/repos/${repo}/actions/workflows/${encodeURIComponent(workflowFile)}/runs`, { event: 'workflow_dispatch', per_page: limit });
+    return (data.workflow_runs ?? []).map((r) => ({
+      id: String(r.id),
+      titulo: String(r.display_title ?? r.name ?? ''),
+      estado: r.status, // queued | in_progress | completed
+      resultado: r.conclusion ?? null, // success | failure | cancelled | ...
+      url: r.html_url,
+    }));
+  }
+
+  /** PR de una rama (el mas reciente), con lo necesario para decidir y para fusionar. */
+  async findPull({ repo, branch }) {
+    checkRepo(repo);
+    const owner = repo.split('/')[0];
+    const list = await this.#get(`/repos/${repo}/pulls`, { head: `${owner}:${branch}`, state: 'all', per_page: 1 });
+    if (!list.length) return null;
+    return this.getPull({ repo, number: list[0].number });
+  }
+
+  async getPull({ repo, number }) {
+    checkRepo(repo);
+    const p = await this.#get(`/repos/${repo}/pulls/${Number(number)}`);
+    return {
+      numero: p.number,
+      url: p.html_url,
+      titulo: String(p.title ?? '').slice(0, 200),
+      estado: p.merged ? 'fusionado' : p.state === 'open' ? 'abierto' : 'cerrado',
+      rama: p.head?.ref,
+      base: p.base?.ref,
+      sha: p.head?.sha,
+      mergeable: p.mergeable ?? null,
+      archivos: p.changed_files ?? 0,
+      adiciones: p.additions ?? 0,
+      borrados: p.deletions ?? 0,
+    };
+  }
+
+  /** Resumen de checks de un commit (check runs de Actions y estados clasicos). */
+  async checksFor({ repo, sha }) {
+    checkRepo(repo);
+    const [runs, st] = await Promise.all([
+      this.#get(`/repos/${repo}/commits/${sha}/check-runs`, { per_page: 50 }),
+      this.#get(`/repos/${repo}/commits/${sha}/status`),
+    ]);
+    const items = [
+      ...(runs.check_runs ?? []).map((c) => ({ nombre: c.name, estado: c.status !== 'completed' ? 'pendiente' : ['success', 'neutral', 'skipped'].includes(c.conclusion) ? 'ok' : 'fallo' })),
+      ...(st.statuses ?? []).map((c) => ({ nombre: c.context, estado: c.state === 'success' ? 'ok' : c.state === 'pending' ? 'pendiente' : 'fallo' })),
+    ];
+    return {
+      total: items.length,
+      ok: items.filter((i) => i.estado === 'ok').length,
+      fallando: items.filter((i) => i.estado === 'fallo').length,
+      pendientes: items.filter((i) => i.estado === 'pendiente').length,
+      items: items.slice(0, 20),
+    };
+  }
+
+  /** Archivos cambiados con su parche, acotados para el movil. */
+  async pullFiles({ repo, number, limit = 40, maxPatch = 6000 }) {
+    checkRepo(repo);
+    const data = await this.#get(`/repos/${repo}/pulls/${Number(number)}/files`, { per_page: limit });
+    return data.slice(0, limit).map((f) => ({
+      ruta: f.filename,
+      estado: f.status,
+      adiciones: f.additions,
+      borrados: f.deletions,
+      parche: f.patch ? String(f.patch).slice(0, maxPatch) : null,
+      truncado: Boolean(f.patch && f.patch.length > maxPatch),
+    }));
+  }
 }
 
 /**
@@ -173,5 +249,36 @@ export class FakeGithubReader {
   async listPulls({ repo, state = 'open', limit = 10 }) {
     this.calls.push(['listPulls', repo, state]);
     return (this.#repo(repo).pulls ?? []).filter((p) => state === 'all' || (state === 'open' ? ['abierto', 'borrador'].includes(p.estado) : !['abierto', 'borrador'].includes(p.estado))).slice(0, limit);
+  }
+
+  // Seguimiento de agentes: repos[repo] = { workflowRuns: [...], pullRequests: [{...getPull, files, checks}] }
+  async listWorkflowRuns({ repo }) {
+    this.calls.push(['listWorkflowRuns', repo]);
+    return [...(this.#repo(repo).workflowRuns ?? [])];
+  }
+
+  async findPull({ repo, branch }) {
+    this.calls.push(['findPull', repo, branch]);
+    const p = (this.#repo(repo).pullRequests ?? []).find((x) => x.rama === branch);
+    return p ? this.getPull({ repo, number: p.numero }) : null;
+  }
+
+  async getPull({ repo, number }) {
+    this.calls.push(['getPull', repo, number]);
+    const p = (this.#repo(repo).pullRequests ?? []).find((x) => x.numero === Number(number));
+    if (!p) throw new GithubReadError('No existe, o el token de lectura no tiene acceso a ese repositorio.');
+    const { files, checks, ...rest } = p;
+    return { url: `https://github.com/${repo}/pull/${p.numero}`, base: 'main', mergeable: true, archivos: files?.length ?? 0, adiciones: 0, borrados: 0, ...rest };
+  }
+
+  async checksFor({ repo, sha }) {
+    this.calls.push(['checksFor', repo, sha]);
+    const p = (this.#repo(repo).pullRequests ?? []).find((x) => x.sha === sha);
+    return p?.checks ?? { total: 0, ok: 0, fallando: 0, pendientes: 0, items: [] };
+  }
+
+  async pullFiles({ repo, number }) {
+    this.calls.push(['pullFiles', repo, number]);
+    return (this.#repo(repo).pullRequests ?? []).find((x) => x.numero === Number(number))?.files ?? [];
   }
 }

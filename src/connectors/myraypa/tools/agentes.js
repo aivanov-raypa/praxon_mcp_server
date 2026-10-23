@@ -24,7 +24,16 @@ export function agentesTools(client, github) {
       execute: async (a, { session }) => {
         const run = await client.createAgentRun(a, originOf(session));
         try {
-          await github.dispatchAgentWorkflow({ repo: run.repo, ref: run.ramaBase ?? 'main', ticketId: run.ticketId, runId: run.runId });
+          const tk = await client.getTicket(a.ticketId).catch(() => null);
+          await github.dispatchAgentWorkflow({
+            repo: run.repo,
+            ref: run.ramaBase ?? 'main',
+            ticketId: run.ticketId,
+            runId: run.runId,
+            tipo: a.tipo,
+            titulo: tk?.titulo ?? '',
+            descripcion: tk?.descripcion ?? '',
+          });
         } catch (err) {
           // No dejar un AgentRun huérfano en cola si el workflow no se ha podido lanzar.
           await client.cancelAgentRun(run.runId, originOf(session)).catch(() => {});

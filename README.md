@@ -63,6 +63,10 @@ Para configurarlo de verdad, copia `.env.example` a `.env`:
 | `MYRAYPA_MODE=http`, `MYRAYPA_API_URL`, `MYRAYPA_API_TOKEN` | API real de MyRAYPA (ver `docs/myraypa-api.md`) |
 | `GITHUB_MODE=http`, `GITHUB_TOKEN`, `GITHUB_WORKFLOW_FILE` | Lanzar agentes de verdad |
 | `GITHUB_READ_TOKEN` | Token de grano fino solo lectura (Contents, Pull requests, Metadata) para que la revisión y la conversación consulten el código del repositorio de cada proyecto (`github_buscar_codigo`, `github_leer_codigo`, `github_commits_recientes`, `github_pull_requests`). Sin él no hay consulta de código |
+| `GITHUB_MERGE_TOKEN` | Token de grano fino PROPIO (Pull requests y Contents en escritura) con el que la app fusiona los pull requests de los agentes. Sin él se puede revisar el diff pero no fusionar. La fusión va atada al SHA revisado y nunca se hace por voz |
+| `GITHUB_MERGE_METHOD` | `squash` (por defecto), `merge` o `rebase` |
+| `AGENTS_WATCH` / `AGENTS_WATCH_SECONDS` | Seguimiento de los agentes en GitHub (por defecto sí, cada 60 s). Necesita que `GITHUB_READ_TOKEN` tenga además Actions y Checks (y Commit statuses) en lectura |
+| `AGENTS_QUEUE_TIMEOUT_MINUTES` | Minutos en cola sin que GitHub arranque el workflow antes de marcar el agente como fallido (10) |
 | `TRIAGE_WATCH` (`true`), `TRIAGE_WATCH_MINUTES` (5), `TRIAGE_WATCH_SETTLE_MINUTES` (3), `TRIAGE_WATCH_BATCH` (5), `TRIAGE_WATCH_FROM`, `REVIEWED_PATH` | Vigilante de tickets nuevos (con `TRIAGE_ENABLED=true`): cada `TRIAGE_WATCH_MINUTES` pregunta a MyRAYPA por los tickets creados desde la marca de corte (por defecto, el primer arranque; `TRIAGE_WATCH_FROM` la fija) y revisa solo los que llevan `TRIAGE_WATCH_SETTLE_MINUTES` creados, en lotes de `TRIAGE_WATCH_BATCH`. Solo deja aviso si hay algo que aprobar |
 | `TRIAGE_CODE_MAX_CALLS` | Consultas de código que puede hacer cada revisión (12 por defecto; 0 las desactiva) |
 

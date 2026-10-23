@@ -42,6 +42,7 @@ export function createServer({
   orchestrator,
   audit,
   triage = null,
+  agents = null,
   sessions = new SessionStore(),
   myraypa = null,
   auth = new DeviceAuth({ config, myraypa }),
@@ -143,6 +144,21 @@ export function createServer({
     }
   }
 
+  async function handleAgents(msg, emit, identity) {
+    if (!agents) {
+      emit({ type: 'error', message: 'El seguimiento de agentes no está configurado (falta GITHUB_READ_TOKEN).' });
+    } else if (msg.type === 'agents_list') {
+      emit({ type: 'agents', canMerge: agents.canMerge, items: await agents.list() });
+    } else if (msg.type === 'agent_diff') {
+      const d = await agents.diff(msg.runId).catch((err) => ({ error: err.message }));
+      emit({ type: 'agent_diff', runId: msg.runId, ...d });
+    } else {
+      const r = await agents.merge({ runId: msg.runId, sha: msg.sha, numero: msg.numero, user: identity.user });
+      emit({ type: 'agent_merge_result', runId: msg.runId, ...r });
+      broadcast({ type: 'agents_changed' });
+    }
+  }
+
   const log = (event) => audit.record(event).catch((err) => console.error('[auditoria]', err.message));
 
   wss.on('connection', (ws, req) => {
@@ -214,6 +230,13 @@ export function createServer({
         speakTimes.push(now);
         synthesizePhrase(msg.text).then((a) => {
           if (ws.readyState === ws.OPEN) emit({ type: 'speech', id: msg.id, text: msg.text, ...(a && { format: a.format, data: a.data }) });
+        });
+        return;
+      }
+      if (msg.type.startsWith('agent')) {
+        handleAgents(msg, emit, identity).catch((err) => {
+          console.error('[agentes]', err);
+          emit({ type: 'error', message: 'No he podido gestionar los agentes.' });
         });
         return;
       }

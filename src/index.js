@@ -11,7 +11,7 @@ try {
   process.exit(1);
 }
 
-const { server, registry, scheduler, watcher } = createApp(config);
+const { server, registry, scheduler, watcher, agents } = createApp(config);
 const port = await server.listen();
 
 console.log(`${config.ASSISTANT_NAME}: servidor escuchando en el puerto ${port}`);
@@ -40,12 +40,17 @@ if (config.TRIAGE_ENABLED) {
 } else {
   console.log('Revisión automática desactivada (TRIAGE_ENABLED=true para activarla; también se puede lanzar a mano desde la app).');
 }
+if (agents && config.AGENTS_WATCH) {
+  agents.start();
+  console.log(`Agentes de desarrollo: se siguen en GitHub cada ${config.AGENTS_WATCH_SECONDS} s.${agents.canMerge ? '' : ' Fusión desactivada (falta GITHUB_MERGE_TOKEN).'}`);
+}
 if (config.MODEL_PROVIDER === 'scripted') console.log('Aviso: modelo guionizado (solo pruebas). Pon MODEL_PROVIDER=anthropic para el real.');
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, async () => {
     scheduler.stop();
     watcher.stop();
+    agents?.stop();
     await server.close();
     process.exit(0);
   });

@@ -26,6 +26,13 @@ const schema = z
     // Lectura del código de los proyectos (revisión y conversación). Token de grano fino SOLO de lectura
     // (Contents, Pull requests, Metadata), distinto de GITHUB_TOKEN. Sin él, el asistente no consulta código.
     GITHUB_READ_TOKEN: z.string().optional(),
+    // Fusión de pull requests desde la app. Token de grano fino PROPIO (Pull requests y Contents en escritura). Sin él no se puede fusionar.
+    GITHUB_MERGE_TOKEN: z.string().optional(),
+    GITHUB_MERGE_METHOD: z.enum(['squash', 'merge', 'rebase']).default('squash'),
+    // Seguimiento de agentes: sondeo a GitHub (necesita GITHUB_READ_TOKEN con Actions y Checks en lectura).
+    AGENTS_WATCH: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+    AGENTS_WATCH_SECONDS: z.coerce.number().min(15).default(60),
+    AGENTS_QUEUE_TIMEOUT_MINUTES: z.coerce.number().min(2).default(10),
 
     VOICE_PROVIDER: z.enum(['none', 'elevenlabs']).default('none'),
     ELEVENLABS_API_KEY: z.string().optional(),

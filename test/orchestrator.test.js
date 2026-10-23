@@ -211,7 +211,9 @@ describe('agentes', () => {
     );
     expect(s.github.dispatched).toHaveLength(0);
     await s.orchestrator.handleConfirm(s.session, { actionId: s.last('confirm_request').actionId, accepted: true }, s.emit);
-    expect(s.github.dispatched).toEqual([{ repo: 'ejemplo/raypa-platform', ref: 'main', ticketId: '215', runId: 'run-1' }]);
+    expect(s.github.dispatched).toEqual([
+      expect.objectContaining({ repo: 'ejemplo/raypa-platform', ref: 'main', ticketId: '215', runId: 'run-1', tipo: 'mejora', titulo: 'Exportar certificados a PDF' }),
+    ]);
   });
 
   it('si GitHub falla, el AgentRun queda cancelado y no huerfano', async () => {

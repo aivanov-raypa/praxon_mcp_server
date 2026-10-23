@@ -18,6 +18,8 @@ import { Triage } from './proposals/triage.js';
 import { TriageScheduler } from './proposals/scheduler.js';
 import { ReviewedStore } from './proposals/reviewed.js';
 import { TicketWatcher } from './proposals/watcher.js';
+import { AgentService } from './agents/service.js';
+import { HttpGithubMerger } from './integrations/github-merge.js';
 import { proposalTools } from './proposals/tools.js';
 
 /** Monta todas las piezas segun la configuracion. Los `overrides` permiten sustituirlas en los tests. */
@@ -33,6 +35,7 @@ export function createApp(config, overrides = {}) {
     overrides.github ??
     (config.GITHUB_MODE === 'http' ? new HttpGithub({ token: config.GITHUB_TOKEN, workflowFile: config.GITHUB_WORKFLOW_FILE }) : new FakeGithub());
   const githubReader = overrides.githubReader ?? (config.GITHUB_READ_TOKEN ? new HttpGithubReader({ token: config.GITHUB_READ_TOKEN }) : null);
+  const merger = overrides.merger ?? (config.GITHUB_MERGE_TOKEN ? new HttpGithubMerger({ token: config.GITHUB_MERGE_TOKEN, method: config.GITHUB_MERGE_METHOD }) : null);
   const model =
     overrides.model ??
     (config.MODEL_PROVIDER === 'anthropic'
@@ -84,7 +87,11 @@ export function createApp(config, overrides = {}) {
     voice,
     now: overrides.now,
   });
-  const server = createServer({ config, orchestrator, audit, triage, myraypa, auth: overrides.auth, stt, voice });
+  let server;
+  const agents = githubReader
+    ? new AgentService({ myraypa, reader: githubReader, merger, audit, config, now: overrides.now, onChange: () => server?.broadcast({ type: 'agents_changed' }) })
+    : null;
+  server = createServer({ config, orchestrator, audit, triage, myraypa, auth: overrides.auth, stt, voice, agents });
   // Se arranca desde index.js (start); en los tests no se programa nada.
   const scheduler = new TriageScheduler({
     times: config.TRIAGE_TIMES,
@@ -97,5 +104,5 @@ export function createApp(config, overrides = {}) {
   // Tickets nuevos: sondeo periódico a MyRAYPA (se arranca desde index.js). La marca de corte se crea al construirlo.
   const reviewed = overrides.reviewed ?? new ReviewedStore(config.REVIEWED_PATH, { from: config.TRIAGE_WATCH_FROM, now: overrides.now });
   const watcher = new TicketWatcher({ myraypa, triage, reviewed, config, now: overrides.now, onBriefing: () => server.broadcast(triage.view()) });
-  return { server, orchestrator, registry, audit, myraypa, github, githubReader, model, voice, stt, store, triage, scheduler, watcher, reviewed };
+  return { server, orchestrator, registry, audit, myraypa, github, githubReader, model, voice, stt, store, triage, scheduler, watcher, reviewed, agents, merger };
 }

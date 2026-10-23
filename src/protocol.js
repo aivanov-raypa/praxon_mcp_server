@@ -40,4 +40,14 @@ export const clientMessage = z.discriminatedUnion('type', [
     actionId: z.string().min(1).max(100),
     accepted: z.boolean(),
   }),
+  // Agentes de desarrollo. La fusion solo existe aqui (nunca como herramienta del modelo): va atada al SHA revisado
+  // y al numero de PR que el usuario teclea en la app.
+  z.object({ type: z.literal('agents_list') }),
+  z.object({ type: z.literal('agent_diff'), runId: z.string().min(1).max(64) }),
+  z.object({
+    type: z.literal('agent_merge'),
+    runId: z.string().min(1).max(64),
+    sha: z.string().regex(/^[0-9a-f]{40}$/),
+    numero: z.number().int().positive(),
+  }),
 ]);

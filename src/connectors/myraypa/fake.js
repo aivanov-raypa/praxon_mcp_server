@@ -270,7 +270,7 @@ export class FakeMyraypa {
     if (this.runs.some((r) => r.ticketId === tk.id && ['en_cola', 'en_curso'].includes(r.estado))) {
       throw new MyraypaError('Ese ticket ya tiene un agente en marcha.', 409);
     }
-    const run = { runId: `run-${this.#nextRun++}`, ticketId: tk.id, tipo, estado: 'en_cola', repo: p.repo, ramaBase: p.ramaBase, rama: null, pullRequest: null, githubRunId: null, bloqueo: null };
+    const run = { runId: `run-${this.#nextRun++}`, ticketId: tk.id, tipo, estado: 'en_cola', repo: p.repo, ramaBase: p.ramaBase, rama: null, pullRequest: null, githubRunId: null, bloqueo: null, creado: new Date().toISOString() };
     this.runs.push(run);
     this.historial.push({ ticketId: tk.id, accion: 'lanzar_agente', runId: run.runId, origin });
     return { ...run };
@@ -281,6 +281,22 @@ export class FakeMyraypa {
       ? this.runs.find((r) => r.runId === runId)
       : [...this.runs].reverse().find((r) => r.ticketId === String(ticketId));
     return run ? { ...run } : null;
+  }
+
+  async listAgentRuns({ estados, limit = 30 } = {}) {
+    const wanted = estados?.length ? estados : ['en_cola', 'en_curso', 'bloqueado', 'pendiente_revision'];
+    return this.runs.filter((r) => wanted.includes(r.estado)).slice(-limit).reverse().map((r) => ({ ...r }));
+  }
+
+  async patchAgentRun(runId, cambios) {
+    const run = this.runs.find((r) => r.runId === runId);
+    if (!run) throw new MyraypaError('Agente no encontrado.', 404);
+    if (['cancelado', 'completado', 'fallido'].includes(run.estado)) throw new MyraypaError(`El agente ya está ${run.estado}.`, 409);
+    const { prUrl, pregunta, ...rest } = cambios;
+    Object.assign(run, rest);
+    if (prUrl !== undefined) run.pullRequest = prUrl;
+    if (pregunta !== undefined) run.bloqueo = pregunta;
+    return { ...run };
   }
 
   async cancelAgentRun(runId, origin) {

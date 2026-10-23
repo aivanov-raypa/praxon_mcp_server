@@ -35,7 +35,10 @@ describe('HttpGithub', () => {
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toBe('https://api.github.com/repos/org/repo/actions/workflows/praxon-agent.yml/dispatches');
     expect(init.headers.Authorization).toBe('Bearer gh');
-    expect(JSON.parse(init.body)).toEqual({ ref: 'main', inputs: { ticketId: '214', runId: 'run-1' } });
+    expect(JSON.parse(init.body)).toEqual({
+      ref: 'main',
+      inputs: { ticketId: '214', runId: 'run-1', tipo: 'mejora', titulo: '', descripcion: '', baseBranch: 'main' },
+    });
   });
   it('falla con un mensaje claro si GitHub rechaza', async () => {
     const gh = new HttpGithub({ token: 'x', fetchImpl: async () => new Response('{}', { status: 404 }) });

@@ -111,3 +111,14 @@ Para que los avisos y frases que genera la propia app ("No te he entendido…", 
 ```
 
 El servidor responde `{ "type": "speech", "id", "text", "format": "mp3", "data": "<base64>" }`. Si no hay voz configurada, falla la síntesis o la conexión supera 20 frases por minuto, responde sin `format` ni `data` y la app usa la voz de Android. `capabilities` incluye `voice: true|false`. Las frases fijas se guardan en memoria en el servidor para no sintetizarlas cada vez.
+
+
+## Agentes de desarrollo
+
+App → servidor:
+
+- `{ "type": "agents_list" }`: agentes abiertos con su PR y checks en vivo.
+- `{ "type": "agent_diff", "runId" }`: archivos cambiados del PR (parche acotado).
+- `{ "type": "agent_merge", "runId", "sha", "numero" }`: fusiona el PR. `sha` es el que mostró la app y `numero` el número de PR que el usuario ha tecleado. Solo existe aquí: no es una herramienta del modelo.
+
+Servidor → app: `agents { canMerge, items[] }` (cada item: runId, ticketId, ticket, tipo, estado, repo, bloqueo, y si hay PR: `pr {numero,url,sha,titulo,archivos,adiciones,borrados,mergeable}`, `checks {total,ok,fallando,pendientes,items}`, `fusionable`, `motivo`, `sinChecks`), `agent_diff { runId, pr, archivos[] | error }`, `agent_merge_result { runId, ok, error? , pr? }`, y `agents_changed` (difusión: la app vuelve a pedir la lista).

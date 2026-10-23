@@ -37,10 +37,18 @@ export class HttpGithub {
   }
 
   /** Dispara el workflow con el ID del ticket y del AgentRun. GitHub responde 204 sin id de ejecucion. */
-  dispatchAgentWorkflow({ repo, ref, ticketId, runId }) {
+  dispatchAgentWorkflow({ repo, ref, ticketId, runId, tipo = 'mejora', titulo = '', descripcion = '' }) {
+    // El runner de GitHub no llega a MyRAYPA: los datos del ticket viajan en los inputs (recortados).
     return this.#post(`/repos/${repo}/actions/workflows/${encodeURIComponent(this.#workflowFile)}/dispatches`, {
       ref,
-      inputs: { ticketId: String(ticketId), runId: String(runId) },
+      inputs: {
+        ticketId: String(ticketId),
+        runId: String(runId),
+        tipo: String(tipo),
+        titulo: String(titulo).slice(0, 200),
+        descripcion: String(descripcion).slice(0, 6000),
+        baseBranch: String(ref),
+      },
     });
   }
 
