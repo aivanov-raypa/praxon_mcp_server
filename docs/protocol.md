@@ -17,6 +17,7 @@ conversación, pero **una acción pendiente de confirmar nunca sobrevive a un co
 - `requestId` es opcional. Si se envía, el servidor lo repite en todos los mensajes de ese turno.
 - `audio: "mp3"` es opcional: indica que la app sabe reproducir audio del servidor. Sin él, o si el servidor no tiene
   voz configurada (`VOICE_PROVIDER=none`), todo llega como texto y la app lo lee con la voz de Android.
+- `user_text` puede llevar `contexto: { tipo: "pr", runId }` (la app lo repite en cada mensaje mientras el usuario tiene abierto un pull request). El servidor lee el PR, se lo da al modelo como contexto y habilita `parche_pr` (solo lectura). Praxon no puede fusionar ni aprobar: la fusión sigue siendo solo `agent_merge` desde el botón.
 - `user_text` interrumpe el turno anterior: el servidor deja de emitir lo que quedaba de la respuesta vieja y
   anula cualquier acción pendiente (solo se ejecuta si el *siguiente* mensaje es una confirmación).
 - `cancel` corta la respuesta en curso, descarta la acción pendiente y el servidor responde `assistant_done`.
@@ -126,8 +127,9 @@ App → servidor:
 - `{ "type": "agents_history", "limit"? }`: historial de agentes terminados (completado o fallido), del más reciente al más antiguo; `limit` 1-100, 30 por defecto.
 - `{ "type": "agent_diff", "runId" }`: archivos cambiados del PR (parche acotado). Vale también para agentes terminados.
 - `{ "type": "agent_merge", "runId", "sha", "numero" }`: fusiona el PR. `sha` es el que mostró la app y `numero` el número de PR que el usuario ha tecleado. Solo existe aquí: no es una herramienta del modelo.
+- `{ "type": "agent_request_changes", "runId", "feedback" }`: pedir cambios sobre un PR pendiente de revisión (10-1500 caracteres). Relanza el agente sobre la misma rama con ese comentario (inputs `prBranch` y `feedback` del workflow); el agente pasa a `en_curso` y, al terminar, vuelve a `pendiente_revision` con un SHA nuevo que hay que revisar de nuevo. No fusiona nada. Respuesta: `agent_changes_result { runId, ok, error? }` y difusión de `agents_changed`.
 
-Servidor → app: `agents { canMerge, items[] }` (cada item: runId, ticketId, ticket, tipo, estado, repo, bloqueo, y si hay PR: `pr {numero,url,sha,titulo,archivos,adiciones,borrados,mergeable}`, `checks {total,ok,fallando,pendientes,items}`, `fusionable`, `motivo`, `sinChecks`), `agents_history { items[] }` (cada item: runId, ticketId, ticket, tipo, estado, repo, motivo, prNumero, prUrl, creado, actualizado), `agent_diff { runId, pr (con resumen), archivos[], estado | error }`, `agent_merge_result { runId, ok, error? , pr? }`, y `agents_changed` (difusión: la app vuelve a pedir la lista).
+Servidor → app: `agents { canMerge, canRequestChanges, items[] }` (cada item: runId, ticketId, ticket, tipo, estado, repo, bloqueo, y si hay PR: `pr {numero,url,sha,titulo,archivos,adiciones,borrados,mergeable}`, `checks {total,ok,fallando,pendientes,items}`, `fusionable`, `motivo`, `sinChecks`), `agents_history { items[] }` (cada item: runId, ticketId, ticket, tipo, estado, repo, motivo, prNumero, prUrl, creado, actualizado), `agent_diff { runId, pr (con resumen), archivos[], estado | error }`, `agent_merge_result { runId, ok, error? , pr?, comentado? }` (`comentado`: se dejó el comentario breve en el ticket tras fusionar; si falla, la fusión no se deshace), y `agents_changed` (difusión: la app vuelve a pedir la lista).
 
 
 ## Consumos

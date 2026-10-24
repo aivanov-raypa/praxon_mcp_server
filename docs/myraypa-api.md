@@ -84,6 +84,8 @@ Escrituras: autonomía `tickets` o superior; todo queda en el `activityLog` con 
 
 | Método | Ruta | Cuerpo / query |
 |---|---|---|
+| GET | `/assistant/tickets/:id/adjuntos` | Adjuntos del ticket y de sus comentarios, numerados (`n`, nombre, tipo, tamaño, origen, `legible`) |
+| GET | `/assistant/tickets/:id/adjuntos/:ref` | Texto de un adjunto (`ref` = número o parte del nombre; `?desde=` para paginar). PDF, Word, Excel/CSV y texto; 415 si no es legible, 413 si pesa más de 15 MB |
 | GET | `/assistant/tickets/:id/detalle` | Todo el ticket: horas, etiquetas, checklist, campos, participantes, subtareas |
 | PATCH | `/assistant/tickets/:id/fechas` | `{ inicio?, vencimiento?, estimadoHoras? }` (`null` borra) |
 | POST | `/assistant/tickets/:id/horas` | `{ horas (0-24], nota?, fecha?, usuario? }` |

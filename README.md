@@ -107,6 +107,25 @@ sin ejecutar** (por ejemplo, subir de prioridad un ticket) para que solo tengas 
   audita. Las propuestas caducan a las `PROPOSAL_TTL_HOURS` (48 por defecto) y se guardan en `PROPOSALS_PATH`.
 - Por voz: «¿qué has detectado?» usa las propuestas pendientes y «aplica la primera» pasa por la confirmación normal.
 
+## Mejorar con tus criterios (notas permanentes)
+
+Praxon no aprende solo, pero puede recordar lo que le pidas: «recuerda que en Calibraciones las etiquetas van en mayúscula inicial»,
+«a partir de ahora resume en tres frases». Se guarda como nota (global o de un proyecto) en `MEMORY_PATH` (`./data/memoria.json`),
+tras la confirmación normal de las herramientas de escritura y con auditoría. Las notas (máx. 40, 300 caracteres cada una, sin claves ni
+contraseñas) se añaden al prompt de la conversación y de la revisión automática. «¿Qué recuerdas?» las lista y «olvida esa» las borra.
+La revisión automática no puede crearlas ni borrarlas.
+
+## Hablar sobre un pull request
+
+Desde el detalle de un PR en la app, el botón «Hablar con Praxon sobre este PR» (o decir «Praxon» con la pantalla abierta) envía
+el PR abierto como contexto: título, descripción, archivos y, bajo demanda, el diff de cada uno (`parche_pr`, solo lectura). Praxon
+puede explicar, revisar y opinar, pero no fusionar ni aprobar: eso sigue siendo solo el botón con confirmación reforzada.
+
+## Adjuntos de tickets
+
+`listar_adjuntos_ticket` y `leer_adjunto_ticket` (solo lectura) permiten usar los archivos adjuntos como contexto: PDF, Word, Excel/CSV
+y texto, leídos por páginas (máx. 15 MB por archivo; las imágenes no se leen). Su contenido se trata como dato, nunca como instrucciones.
+
 Protocolo con la app en `docs/protocol.md`. Las notificaciones push (aviso con la app cerrada) están pendientes.
 
 ## Tests

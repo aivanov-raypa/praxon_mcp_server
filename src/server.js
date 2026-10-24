@@ -1,4 +1,5 @@
 import { createServer as createHttpServer } from 'node:http';
+import { prepararContextoPR } from './agents/contexto.js';
 import { WebSocketServer } from 'ws';
 import { clientMessage } from './protocol.js';
 import { SessionStore } from './session.js';
@@ -161,12 +162,16 @@ export function createServer({
     if (!agents) {
       emit({ type: 'error', message: 'El seguimiento de agentes no está configurado (falta GITHUB_READ_TOKEN).' });
     } else if (msg.type === 'agents_list') {
-      emit({ type: 'agents', canMerge: agents.canMerge, items: await agents.list() });
+      emit({ type: 'agents', canMerge: agents.canMerge, canRequestChanges: agents.canRequestChanges, items: await agents.list() });
     } else if (msg.type === 'agents_history') {
       emit({ type: 'agents_history', items: await agents.history({ limit: msg.limit }) });
     } else if (msg.type === 'agent_diff') {
       const d = await agents.diff(msg.runId).catch((err) => ({ error: err.message }));
       emit({ type: 'agent_diff', runId: msg.runId, ...d });
+    } else if (msg.type === 'agent_request_changes') {
+      const r = await agents.requestChanges({ runId: msg.runId, feedback: msg.feedback, user: identity.user });
+      emit({ type: 'agent_changes_result', runId: msg.runId, ...r });
+      broadcast({ type: 'agents_changed' });
     } else {
       const r = await agents.merge({ runId: msg.runId, sha: msg.sha, numero: msg.numero, user: identity.user });
       emit({ type: 'agent_merge_result', runId: msg.runId, ...r });
@@ -276,7 +281,9 @@ export function createServer({
       let work;
       // Todo lo que haga este mensaje contra MyRAYPA se hace como el usuario del dispositivo.
       work = runAsUser(identity.email, () => {
-        if (msg.type === 'user_text') return orchestrator.handleUserText(session, msg, emit);
+        if (msg.type === 'user_text') {
+          return prepararContextoPR(session, msg.contexto, agents).then(() => orchestrator.handleUserText(session, msg, emit));
+        }
         if (msg.type === 'confirm') return orchestrator.handleConfirm(session, msg, emit);
         return orchestrator.cancel(session, emit);
       });

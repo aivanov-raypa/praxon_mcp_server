@@ -71,7 +71,10 @@ export class Triage {
   #running = false;
   #busy = new Set();
 
-  constructor({ model, registry, audit, store, config, now = Date.now }) {
+  #memory;
+
+  constructor({ model, registry, audit, store, config, now = Date.now, memory = null }) {
+    this.#memory = memory;
     this.#model = model;
     this.#registry = registry;
     this.#audit = audit;
@@ -122,7 +125,7 @@ export class Triage {
       for (let step = 0; step < this.#config.TRIAGE_MAX_STEPS && !finished; step++) {
         let message;
         for await (const ev of this.#model.stream({
-          system: buildTriagePrompt({ name: this.#config.ASSISTANT_NAME, user, now: new Date(this.#now()), maxActions: this.#config.TRIAGE_MAX_ACTIONS, allowed: [...this.#allowed()], code: code ? maxCode : 0, focus }),
+          system: buildTriagePrompt({ name: this.#config.ASSISTANT_NAME, user, now: new Date(this.#now()), maxActions: this.#config.TRIAGE_MAX_ACTIONS, allowed: [...this.#allowed()], code: code ? maxCode : 0, focus, memoria: this.#memory?.render() }),
           messages,
           tools,
           model: this.#config.TRIAGE_MODEL ?? this.#config.MODEL_DEFAULT,

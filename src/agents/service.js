@@ -25,6 +25,14 @@ export function breveResumen(texto, max = 260) {
   return punto > max * 0.5 ? corte.slice(0, punto + 1) : `${corte.slice(0, corte.lastIndexOf(' ') > 0 ? corte.lastIndexOf(' ') : max)}…`;
 }
 
+/** Marca en `pregunta` de una ejecución que se está iterando sobre un PR existente; guarda el id del workflow anterior. */
+const ITERANDO = 'Aplicando los cambios pedidos';
+const marcaIteracion = (anterior) => `${ITERANDO} [tras ejecución ${anterior ?? 'ninguna'}]`;
+const iteracionDe = (run) => {
+  const m = new RegExp(`^${ITERANDO} \\[tras ejecución (\\S+)\\]`).exec(run.bloqueo ?? '');
+  return m ? { anterior: m[1] === 'ninguna' ? null : m[1] } : null;
+};
+
 const prNumero = (url) => Number(/\/pull\/(\d+)/.exec(url ?? '')?.[1]) || null;
 
 export class AgentError extends Error {}
@@ -33,6 +41,7 @@ export class AgentService {
   #myraypa;
   #reader;
   #merger;
+  #dispatcher;
   #audit;
   #config;
   #now;
@@ -40,7 +49,8 @@ export class AgentService {
   #busy = false;
   #onChange;
 
-  constructor({ myraypa, reader, merger = null, audit, config, now = Date.now, onChange = () => {} }) {
+  constructor({ myraypa, reader, merger = null, dispatcher = null, audit, config, now = Date.now, onChange = () => {} }) {
+    this.#dispatcher = dispatcher;
     this.#myraypa = myraypa;
     this.#reader = reader;
     this.#merger = merger;
@@ -52,6 +62,10 @@ export class AgentService {
 
   get canMerge() {
     return Boolean(this.#merger);
+  }
+
+  get canRequestChanges() {
+    return Boolean(this.#dispatcher);
   }
 
   async #patch(run, cambios) {
@@ -96,6 +110,9 @@ export class AgentService {
     const base = { ...(wf && String(run.githubRunId) !== wf.id ? { githubRunId: wf.id } : {}) };
     const pr = wf || run.estado === 'pendiente_revision' ? await this.#reader.findPull({ repo: run.repo, branch }) : null;
 
+    const it = pr?.estado === 'abierto' && run.estado === 'en_curso' ? iteracionDe(run) : null;
+    if (it) return this.#syncIteracion(run, pr, wf, it, base);
+
     if (pr) {
       if (pr.estado === 'fusionado') return this.#patch(run, { ...base, estado: 'completado', rama: branch, prUrl: pr.url });
       if (pr.estado === 'cerrado') return this.#patch(run, { ...base, estado: 'fallido', rama: branch, prUrl: pr.url, pregunta: 'El pull request se cerró sin fusionar.' });
@@ -120,6 +137,24 @@ export class AgentService {
       return this.#patch(run, { ...base, estado: 'bloqueado', pregunta: `El agente ha terminado sin pull request: necesita más información. Detalle en ${wf.url}` });
     }
     return this.#patch(run, { ...base, estado: 'fallido', pregunta: `El agente ha terminado con error (${wf.resultado ?? 'desconocido'}). Detalle en ${wf.url}` });
+  }
+
+  /**
+   * Seguimiento de una iteración sobre un PR que ya existe ("pedir cambios"). Aunque el PR esté abierto, el agente sigue
+   * trabajando hasta que termine una ejecución del workflow distinta de la anterior; hasta entonces no está listo para revisar.
+   */
+  async #syncIteracion(run, pr, wf, { anterior }, base) {
+    const nueva = wf && String(wf.id) !== String(anterior);
+    if (!nueva) {
+      const desde = Date.parse(run.actualizado ?? '');
+      if (Number.isFinite(desde) && this.#now() - desde > this.#config.AGENTS_QUEUE_TIMEOUT_MINUTES * 60_000) {
+        return this.#patch(run, { estado: 'pendiente_revision', pregunta: 'GitHub no ha iniciado los cambios pedidos. El pull request sigue como estaba.' });
+      }
+      return false;
+    }
+    if (wf.estado !== 'completed') return false;
+    const fallo = wf.resultado === 'success' ? null : `Los cambios pedidos terminaron con error (${wf.resultado ?? 'desconocido'}). El pull request sigue como estaba. Detalle en ${wf.url}`;
+    return this.#patch(run, { ...base, githubRunId: wf.id, estado: 'pendiente_revision', rama: branchOf(run), prUrl: pr.url, pregunta: fallo });
   }
 
   async #titulo(ticketId) {
@@ -182,6 +217,51 @@ export class AgentService {
     const { run, pr } = await this.#runAndPr(runId, { historico: true });
     const archivos = await this.#reader.pullFiles({ repo: run.repo, number: pr.numero });
     return { runId, pr, archivos, estado: run.estado };
+  }
+
+  /**
+   * "Pedir cambios": relanza el agente sobre la MISMA rama del pull request con el comentario del usuario. Sigue siendo un
+   * pull request que el usuario debe revisar y fusionar él (la fusión va atada al SHA, que cambiará). Solo desde la app.
+   */
+  async requestChanges({ runId, feedback, user }) {
+    const evento = { event: 'agent_request_changes', user, runId };
+    try {
+      if (!this.#dispatcher) throw new AgentError('Pedir cambios no está disponible en el servidor.');
+      const texto = String(feedback ?? '').trim();
+      if (texto.length < 10) throw new AgentError('Explica con algo más de detalle qué hay que cambiar.');
+      if (texto.length > 1500) throw new AgentError('El comentario es demasiado largo (máximo 1500 caracteres).');
+      const { run, pr } = await this.#runAndPr(runId);
+      Object.assign(evento, { repo: run.repo, pr: pr.numero, sha: pr.sha, comentario: texto.slice(0, 500) });
+      if (pr.estado !== 'abierto') throw new AgentError('El pull request ya no está abierto.');
+      const ticket = await this.#myraypa.getTicket(run.ticketId).catch(() => null);
+      const anterior = run.githubRunId ?? null;
+      if (!(await this.#patch(run, { estado: 'en_curso', pregunta: marcaIteracion(anterior) }))) {
+        throw new AgentError('No he podido actualizar el estado del agente en MyRAYPA.');
+      }
+      try {
+        await this.#dispatcher.dispatchAgentWorkflow({
+          repo: run.repo,
+          ref: pr.base ?? run.ramaBase ?? 'main',
+          ticketId: run.ticketId,
+          runId: run.runId,
+          tipo: run.tipo,
+          titulo: ticket?.titulo ?? '',
+          descripcion: ticket?.descripcion ?? '',
+          prBranch: pr.rama ?? branchOf(run),
+          feedback: texto,
+        });
+      } catch (err) {
+        await this.#patch(run, { estado: 'pendiente_revision', pregunta: null }); // el PR sigue como estaba
+        throw new AgentError(`No he podido lanzar el agente (${err.message}).`);
+      }
+      await this.#audit.record({ ...evento, ok: true });
+      this.#onChange();
+      return { ok: true };
+    } catch (err) {
+      await this.#audit.record({ ...evento, ok: false, error: err.message });
+      if (err instanceof AgentError) return { ok: false, error: err.message };
+      throw err;
+    }
   }
 
   /** Historial: agentes terminados (fusionados o fallidos), del más reciente al más antiguo. Solo datos de MyRAYPA; el PR se consulta en el detalle. */

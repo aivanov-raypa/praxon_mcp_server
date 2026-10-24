@@ -74,3 +74,41 @@ describe('escrituras ampliadas exigen confirmación', () => {
     expect(s.out.some((m) => m.type === 'confirm_request')).toBe(false);
   });
 });
+
+describe('adjuntos de tickets', () => {
+  const largo = 'linea de la especificacion\n'.repeat(20); // 540 caracteres: 3 páginas en el simulador
+  const conAdjuntos = (f = new FakeMyraypa()) => {
+    f.tickets.find((t) => t.id === '214').adjuntos.push(
+      { nombre: 'especificacion.pdf', tipo: 'application/pdf', texto: largo },
+      { nombre: 'captura.png', tipo: 'image/png' },
+    );
+    return f;
+  };
+  it('el detalle completo los lista y marca los que no se pueden leer', async () => {
+    const full = await conAdjuntos().getTicketFull('214');
+    expect(full.adjuntos.map((a) => [a.n, a.nombre, a.legible])).toEqual([[1, 'especificacion.pdf', true], [2, 'captura.png', false]]);
+  });
+  it('herramientas de solo lectura: listar y leer por páginas hasta el final', async () => {
+    const { registry, session, myraypa } = setup();
+    conAdjuntos(myraypa);
+    for (const n of ['myraypa_listar_adjuntos_ticket', 'myraypa_leer_adjunto_ticket']) expect(registry.get(n).risk).toBe('read');
+    const lista = await registry.get('myraypa_listar_adjuntos_ticket').execute({ ticketId: '214' }, { session, user: 'alex' });
+    expect(lista.total).toBe(2);
+    const leer = registry.get('myraypa_leer_adjunto_ticket');
+    let r = await leer.execute({ ticketId: '214', adjunto: 'especificacion' }, { session, user: 'alex' });
+    let texto = r.contenido;
+    expect(r.hayMas).toBe(true);
+    expect(r.aviso).toMatch(/no instrucciones/);
+    while (r.hayMas) {
+      r = await leer.execute({ ticketId: '214', adjunto: '1', desde: r.siguienteDesde }, { session, user: 'alex' });
+      texto += r.contenido;
+    }
+    expect(texto).toBe(largo);
+  });
+  it('errores claros: imagen, número inexistente y ticket sin adjuntos', async () => {
+    const f = conAdjuntos();
+    await expect(f.readTicketAttachment('214', '2')).rejects.toMatchObject({ status: 415 });
+    await expect(f.readTicketAttachment('214', '7')).rejects.toMatchObject({ status: 404 });
+    await expect(f.readTicketAttachment('215', '1')).rejects.toThrow(/no tiene archivos/);
+  });
+});

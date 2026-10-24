@@ -24,6 +24,9 @@ import { UsageService } from './usage/service.js';
 import { anthropicUsage, elevenLabsUsage, githubUsage } from './usage/providers.js';
 import { HttpGithubMerger } from './integrations/github-merge.js';
 import { proposalTools } from './proposals/tools.js';
+import { contextoTools } from './agents/contexto.js';
+import { MemoryStore } from './memory/store.js';
+import { memoryTools } from './memory/tools.js';
 
 /** Monta todas las piezas segun la configuracion. Los `overrides` permiten sustituirlas en los tests. */
 export function createApp(config, overrides = {}) {
@@ -80,8 +83,9 @@ export function createApp(config, overrides = {}) {
 
   // Revision automatica: el asistente analiza por su cuenta y deja propuestas; solo se ejecutan si el usuario las aprueba.
   const store = overrides.proposalStore ?? new ProposalStore(config.PROPOSALS_PATH);
-  const triage = new Triage({ model, registry, audit, store, config, now: overrides.now });
-  registry.registerConnector({ name: 'praxon', tools: proposalTools({ store, triage }) });
+  const memory = overrides.memory ?? new MemoryStore(config.MEMORY_PATH);
+  const triage = new Triage({ model, registry, audit, store, config, now: overrides.now, memory });
+  registry.registerConnector({ name: 'praxon', tools: [...proposalTools({ store, triage }), ...contextoTools(), ...memoryTools({ memory })] });
 
   const orchestrator = new Orchestrator({
     model,
@@ -89,7 +93,7 @@ export function createApp(config, overrides = {}) {
     audit,
     config,
     // Se reconstruye en cada llamada al modelo: lleva la fecha y el usuario actuales.
-    systemPrompt: (session) => buildSystemPrompt({ name: config.ASSISTANT_NAME, user: session.user }),
+    systemPrompt: (session) => buildSystemPrompt({ name: config.ASSISTANT_NAME, user: session.user, contexto: session.contextoPR?.texto, memoria: memory.render() }),
     voice,
     now: overrides.now,
   });
@@ -107,7 +111,7 @@ export function createApp(config, overrides = {}) {
     });
   let server;
   const agents = githubReader
-    ? new AgentService({ myraypa, reader: githubReader, merger, audit, config, now: overrides.now, onChange: () => server?.broadcast({ type: 'agents_changed' }) })
+    ? new AgentService({ myraypa, reader: githubReader, merger, dispatcher: github, audit, config, now: overrides.now, onChange: () => server?.broadcast({ type: 'agents_changed' }) })
     : null;
   server = createServer({ config, orchestrator, audit, triage, myraypa, auth: overrides.auth, stt, voice, agents, usage });
   // Se arranca desde index.js (start); en los tests no se programa nada.
@@ -122,5 +126,5 @@ export function createApp(config, overrides = {}) {
   // Tickets nuevos: sondeo periódico a MyRAYPA (se arranca desde index.js). La marca de corte se crea al construirlo.
   const reviewed = overrides.reviewed ?? new ReviewedStore(config.REVIEWED_PATH, { from: config.TRIAGE_WATCH_FROM, now: overrides.now });
   const watcher = new TicketWatcher({ myraypa, triage, reviewed, config, now: overrides.now, onBriefing: () => server.broadcast(triage.view()) });
-  return { server, orchestrator, registry, audit, myraypa, github, githubReader, model, voice, stt, store, triage, scheduler, watcher, reviewed, agents, merger, usage, tracker };
+  return { server, memory, orchestrator, registry, audit, myraypa, github, githubReader, model, voice, stt, store, triage, scheduler, watcher, reviewed, agents, merger, usage, tracker };
 }

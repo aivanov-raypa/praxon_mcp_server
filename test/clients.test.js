@@ -40,6 +40,14 @@ describe('HttpGithub', () => {
       inputs: { ticketId: '214', runId: 'run-1', tipo: 'mejora', titulo: '', descripcion: '', baseBranch: 'main' },
     });
   });
+  it('al pedir cambios envía también la rama del PR y el comentario; sin ellos, los inputs de siempre', async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
+    const gh = new HttpGithub({ token: 'gh', fetchImpl });
+    await gh.dispatchAgentWorkflow({ repo: 'org/repo', ref: 'main', ticketId: 1, runId: 'r', prBranch: 'praxon/ticket-1-r', feedback: 'Cambia X' });
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body).inputs).toMatchObject({ prBranch: 'praxon/ticket-1-r', feedback: 'Cambia X' });
+    await gh.dispatchAgentWorkflow({ repo: 'org/repo', ref: 'main', ticketId: 1, runId: 'r' });
+    expect(Object.keys(JSON.parse(fetchImpl.mock.calls[1][1].body).inputs)).not.toContain('feedback');
+  });
   it('falla con un mensaje claro si GitHub rechaza', async () => {
     const gh = new HttpGithub({ token: 'x', fetchImpl: async () => new Response('{}', { status: 404 }) });
     await expect(gh.dispatchAgentWorkflow({ repo: 'a/b', ref: 'main', ticketId: 1, runId: 'r' })).rejects.toThrow(/404/);

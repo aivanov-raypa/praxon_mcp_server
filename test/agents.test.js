@@ -4,21 +4,22 @@ import { FakeGithubReader } from '../src/integrations/github-read.js';
 import { FakeGithubMerger } from '../src/integrations/github-merge.js';
 import { MemoryAudit } from '../src/audit/log.js';
 import { FakeMyraypa } from '../src/connectors/myraypa/fake.js';
+import { FakeGithub } from '../src/integrations/github.js';
 
 const REPO = 'ejemplo/raypa-platform';
 const SHA = 'a'.repeat(40);
 const config = { GITHUB_WORKFLOW_FILE: 'praxon-agent.yml', AGENTS_QUEUE_TIMEOUT_MINUTES: 10, AGENTS_WATCH_SECONDS: 60 };
 const OK = { total: 2, ok: 2, fallando: 0, pendientes: 0, items: [] };
 
-async function build({ workflowRuns = [], pullRequests = [], merger = new FakeGithubMerger(), clock = Date.now() } = {}) {
+async function build({ workflowRuns = [], pullRequests = [], merger = new FakeGithubMerger(), clock = Date.now(), dispatcher = new FakeGithub() } = {}) {
   const myraypa = new FakeMyraypa();
   const run = await myraypa.createAgentRun({ ticketId: '215', tipo: 'mejora' }, 'test');
   const reader = new FakeGithubReader({ [REPO]: { workflowRuns, pullRequests } });
   const audit = new MemoryAudit();
   let changed = 0;
-  const svc = new AgentService({ myraypa, reader, merger, audit, config, now: () => clock, onChange: () => changed++ });
+  const svc = new AgentService({ myraypa, reader, merger, dispatcher, audit, config, now: () => clock, onChange: () => changed++ });
   const state = () => myraypa.runs[0];
-  return { myraypa, reader, merger, audit, svc, run, state, changed: () => changed };
+  return { myraypa, reader, merger, dispatcher, audit, svc, run, state, changed: () => changed, setClock: (t) => { clock = t; } };
 }
 const wf = (run, extra = {}) => ({ id: '777', titulo: `praxon ticket=${run.ticketId} run=${run.runId}`, estado: 'in_progress', resultado: null, url: 'https://gh/run/777', ...extra });
 const pr = (run, extra = {}) => ({ numero: 12, titulo: 'Exportar PDF', estado: 'abierto', rama: branchOf(run), sha: SHA, checks: OK, files: [{ ruta: 'a.js', estado: 'modified', adiciones: 3, borrados: 1, parche: '@@' }], ...extra });
@@ -191,5 +192,93 @@ describe('historial', () => {
     expect(d.archivos[0].ruta).toBe('a.js');
     const again = await b.svc.merge({ runId: 'run-1', sha: SHA, numero: 12, user: 'alex' });
     expect(again.ok).toBe(false);
+  });
+});
+
+describe('pedir cambios sobre un pull request', () => {
+  const R = { ticketId: '215', runId: 'run-1' };
+  const FEEDBACK = 'Usa el componente Button existente y añade un test del caso vacío';
+  const ready = async (opts = {}) => {
+    const b = await build({ workflowRuns: [wf(R, { estado: 'completed', resultado: 'success' })], pullRequests: [pr(R, { base: 'main' })], ...opts });
+    await b.svc.tick();
+    return b;
+  };
+
+  it('relanza el agente sobre la misma rama con el comentario y lo deja auditado', async () => {
+    const b = await ready();
+    const r = await b.svc.requestChanges({ runId: 'run-1', feedback: FEEDBACK, user: 'alex' });
+    expect(r).toEqual({ ok: true });
+    expect(b.state().estado).toBe('en_curso');
+    expect(b.state().bloqueo).toMatch(/^Aplicando los cambios pedidos \[tras ejecución 777\]/);
+    expect(b.dispatcher.dispatched).toHaveLength(1);
+    expect(b.dispatcher.dispatched[0]).toMatchObject({ repo: REPO, ref: 'main', runId: 'run-1', prBranch: 'praxon/ticket-215-run-1', feedback: FEEDBACK });
+    expect(b.audit.of('agent_request_changes')[0]).toMatchObject({ ok: true, user: 'alex', pr: 12, comentario: FEEDBACK });
+    expect(b.changed()).toBeGreaterThan(1);
+  });
+
+  it('rechaza comentarios vacíos o enormes, PR no pendiente, PR cerrado y servidor sin lanzador', async () => {
+    const b = await ready();
+    expect((await b.svc.requestChanges({ runId: 'run-1', feedback: 'corto' })).error).toMatch(/con algo más de detalle/);
+    expect((await b.svc.requestChanges({ runId: 'run-1', feedback: 'x'.repeat(1501) })).error).toMatch(/demasiado largo/);
+    expect(b.dispatcher.dispatched).toHaveLength(0);
+    const closed = await ready({ pullRequests: [pr(R, { estado: 'cerrado' })] });
+    expect((await closed.svc.requestChanges({ runId: 'run-1', feedback: FEEDBACK })).ok).toBe(false);
+    const queued = await build();
+    expect((await queued.svc.requestChanges({ runId: 'run-1', feedback: FEEDBACK })).error).toMatch(/pendiente de revisión/);
+    const sin = await ready({ dispatcher: null });
+    expect((await sin.svc.requestChanges({ runId: 'run-1', feedback: FEEDBACK })).error).toMatch(/no está disponible/);
+  });
+
+  it('si GitHub no lanza el workflow, el PR vuelve a quedar pendiente de revisión', async () => {
+    const b = await ready();
+    b.dispatcher.failNext = true;
+    const r = await b.svc.requestChanges({ runId: 'run-1', feedback: FEEDBACK });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/No he podido lanzar el agente/);
+    expect(b.state().estado).toBe('pendiente_revision');
+    expect(b.state().bloqueo).toBeNull();
+  });
+
+  const iterando = async () => {
+    const runs = [wf(R, { estado: 'completed', resultado: 'success' })];
+    const b = await build({ workflowRuns: runs, pullRequests: [pr(R, { base: 'main' })] });
+    await b.svc.tick();
+    await b.svc.requestChanges({ runId: 'run-1', feedback: FEEDBACK });
+    return { ...b, runs };
+  };
+
+  it('seguimiento: sigue en curso mientras solo se ve la ejecución anterior o la nueva no ha terminado', async () => {
+    const b = await iterando();
+    await b.svc.tick(); // solo se ve la ejecución anterior, ya terminada: no se vuelve a pendiente de revisión
+    expect(b.state().estado).toBe('en_curso');
+    b.runs.unshift(wf(R, { id: '888', estado: 'in_progress' }));
+    await b.svc.tick();
+    expect(b.state().estado).toBe('en_curso');
+  });
+
+  it('seguimiento: al terminar la ejecución nueva vuelve a pendiente de revisión, para revisar de nuevo', async () => {
+    const b = await iterando();
+    b.runs.unshift(wf(R, { id: '888', estado: 'completed', resultado: 'success' }));
+    await b.svc.tick();
+    expect(b.state()).toMatchObject({ estado: 'pendiente_revision', githubRunId: '888', bloqueo: null });
+    await b.svc.tick();
+    expect(b.state().estado).toBe('pendiente_revision');
+  });
+
+  it('seguimiento: si la ejecución nueva falla, el PR queda como estaba y se avisa', async () => {
+    const b = await iterando();
+    b.runs.unshift(wf(R, { id: '888', estado: 'completed', resultado: 'failure' }));
+    await b.svc.tick();
+    expect(b.state().estado).toBe('pendiente_revision');
+    expect(b.state().bloqueo).toMatch(/terminaron con error \(failure\).*sigue como estaba/);
+  });
+
+  it('seguimiento: si GitHub no arranca la ejecución en el plazo, vuelve a pendiente de revisión', async () => {
+    const b = await iterando();
+    b.state().actualizado = new Date(Date.now() - 11 * 60_000).toISOString();
+    b.setClock(Date.now());
+    await b.svc.tick();
+    expect(b.state().estado).toBe('pendiente_revision');
+    expect(b.state().bloqueo).toMatch(/no ha iniciado/);
   });
 });

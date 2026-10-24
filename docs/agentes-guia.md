@@ -28,6 +28,7 @@ Se ha añadido la dependencia `androidx.biometric:biometric:1.1.0`: sincroniza G
 1. Pide a Praxon "lanza un agente en el ticket N" (confirma).
 2. En Actions aparece la ejecución "praxon ticket=… run=…". Al terminar se abre el PR `praxon/ticket-<id>-<run>`.
 3. En la pantalla Agentes: Revisar diff → Aprobar y fusionar → teclear el número del PR → huella/PIN.
+   Si el resultado no es el esperado: «Pedir cambios» (describe qué cambiar) relanza el agente sobre la misma rama; vuelve a quedar pendiente de revisión con un SHA nuevo. Requiere que `.github/workflows/praxon-agent.yml` con los inputs `prBranch` y `feedback` esté en la rama base. Los commits que empuja el workflow con `GITHUB_TOKEN` no disparan otros workflows (CI): el PR puede quedar sin checks tras la iteración.
 
 ## Seguridad
 El agente solo edita archivos; commit, push y PR los hace el workflow, que además descarta cualquier cambio en `.github/`. La fusión va atada al SHA revisado, exige checks en verde, queda auditada y no existe como herramienta del modelo (nunca por voz). Un ticket malicioso solo puede producir un PR que tú revisas.

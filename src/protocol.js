@@ -14,6 +14,8 @@ export const clientMessage = z.discriminatedUnion('type', [
     requestId: z.string().max(64).optional(),
     /** La app sabe reproducir audio del servidor en este formato. */
     audio: z.literal('mp3').optional(),
+    /** Pantalla desde la que habla el usuario: un pull request abierto. Se repite en cada mensaje mientras siga abierto. */
+    contexto: z.object({ tipo: z.literal('pr'), runId: z.string().min(1).max(64) }).optional(),
   }),
   z.object({
     type: z.literal('confirm'),
@@ -60,4 +62,6 @@ export const clientMessage = z.discriminatedUnion('type', [
     sha: z.string().regex(/^[0-9a-f]{40}$/),
     numero: z.number().int().positive(),
   }),
+  // Pedir cambios sobre un PR: relanza el agente sobre la misma rama con este comentario. No fusiona nada.
+  z.object({ type: z.literal('agent_request_changes'), runId: z.string().min(1).max(64), feedback: z.string().trim().min(1).max(1500) }),
 ]);

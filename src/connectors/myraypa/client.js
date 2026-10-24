@@ -29,6 +29,8 @@ export const ROUTES = {
   projectMilestones: (id) => `/assistant/projects/${id}/hitos`,
   projectMilestone: (id, hitoId) => `/assistant/projects/${id}/hitos/${hitoId}`,
   ticketFull: (id) => `/assistant/tickets/${id}/detalle`,
+  ticketAttachments: (id) => `/assistant/tickets/${id}/adjuntos`,
+  ticketAttachment: (id, ref) => `/assistant/tickets/${id}/adjuntos/${encodeURIComponent(ref)}`,
   ticketDates: (id) => `/assistant/tickets/${id}/fechas`,
   ticketHours: (id) => `/assistant/tickets/${id}/horas`,
   ticketLabels: (id) => `/assistant/tickets/${id}/etiquetas`,
@@ -130,6 +132,12 @@ export class HttpMyraypaClient {
   // ── Detalle ampliado, horas, etiquetas, checklist, campos, subtareas, participantes e informes ──
   getTicketFull(id) {
     return this.#request('GET', ROUTES.ticketFull(id));
+  }
+  listTicketAttachments(id) {
+    return this.#request('GET', ROUTES.ticketAttachments(id));
+  }
+  readTicketAttachment(id, ref, desde) {
+    return this.#request('GET', ROUTES.ticketAttachment(id, ref), { query: { desde } });
   }
   setTicketDates(id, cambios, origin) {
     return this.#request('PATCH', ROUTES.ticketDates(id), { body: { ...cambios, origin } });

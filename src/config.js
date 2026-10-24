@@ -86,6 +86,7 @@ const schema = z
     TRIAGE_TIMEOUT_MS: z.coerce.number().int().positive().default(180_000),
     PROPOSAL_TTL_HOURS: z.coerce.number().positive().default(48),
     PROPOSALS_PATH: z.string().default('./data/proposals.json'),
+    MEMORY_PATH: z.string().default('./data/memoria.json'),
 
     CONFIRM_TTL_MS: z.coerce.number().int().positive().default(60_000),
     MAX_TOOL_ITERATIONS: z.coerce.number().int().positive().default(6),
