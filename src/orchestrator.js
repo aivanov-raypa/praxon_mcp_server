@@ -3,17 +3,20 @@ import { SentenceChunker } from './chunker.js';
 import { CONFIRMATION_ERRORS, checkConfirmation, createPending } from './confirmations.js';
 import { appendUserText, trimHistory } from './session.js';
 import { MAX_BATCH, resumenDeLote } from './batch.js';
+import { serializeResult, resultText } from './tools/result.js';
 
 const MAX_RESULT_CHARS = 8000;
 
 /** Un turno = una peticion del usuario (o una confirmacion) hasta que el asistente termina de responder. */
-function newTurn(requestId, audio = false) {
+function newTurn(requestId, audio = false, byUser = false) {
   const controller = new AbortController();
   return {
     id: randomUUID(),
     requestId,
     /** La app admite audio del servidor en este turno. */
     audio,
+    /** El turno nace de un mensaje del usuario (no de una confirmación): solo entonces puede haber una orden explícita. */
+    byUser,
     /** Cola ordenada de mensajes hacia la app: el audio de cada frase se sintetiza en paralelo pero se envia en orden. */
     out: Promise.resolve(),
     signal: controller.signal,
@@ -24,10 +27,7 @@ function newTurn(requestId, audio = false) {
   };
 }
 
-function serialize(out) {
-  const s = JSON.stringify(out ?? { ok: true });
-  return s.length <= MAX_RESULT_CHARS ? s : JSON.stringify({ recortado: true, texto: s.slice(0, MAX_RESULT_CHARS) });
-}
+const serialize = (out) => serializeResult(out, MAX_RESULT_CHARS);
 
 const toolError = (id, message) => ({ type: 'tool_result', tool_use_id: id, is_error: true, content: `Error: ${message}` });
 
@@ -59,7 +59,7 @@ export class Orchestrator {
   // ---------- API publica ----------
 
   handleUserText(session, { text, requestId, audio }, emit) {
-    const turn = this.#startTurn(session, requestId, audio === 'mp3'); // interrumpe de inmediato el turno anterior
+    const turn = this.#startTurn(session, requestId, audio === 'mp3', true); // interrumpe de inmediato el turno anterior
     return session.runExclusive(async () => {
       if (session.pending) {
         // "Solo se ejecuta si el siguiente mensaje es una confirmacion explicita": cualquier otro mensaje la anula.
@@ -108,10 +108,26 @@ export class Orchestrator {
               content: JSON.stringify({ cancelada: true, mensaje: 'El usuario ha cancelado la acción. No se ha ejecutado nada.' }),
             };
       }
+      if (accepted) this.#resultCard(pending.actions, results, emit);
       const outcome = this.#finishTools(session, turn, assistantContent, toolUses, results);
       if (outcome === 'done') await this.#loop(session, turn, emit);
       await turn.out;
     });
+  }
+
+  /** Tarjeta con lo que se acaba de hacer (plan visible): qué se ha ejecutado y qué ha fallado. No se lee en voz alta. */
+  #resultCard(actions, results, emit) {
+    const MAX = 12;
+    const clip = (s) => String(s).replace(/^Voy a /, '').replace(/^./, (c) => c.toUpperCase()).slice(0, 90);
+    const filas = actions.slice(0, MAX).map((a) => {
+      const fallo = results[a.index]?.is_error;
+      return { etiqueta: clip(a.summary), valor: fallo ? 'No se ha hecho' : '', estado: fallo ? 'critico' : 'ok' };
+    });
+    if (actions.length > MAX) filas.push({ etiqueta: `y ${actions.length - MAX} más`, valor: '' });
+    if (actions.some((a, i) => a.toolName === 'myraypa_actualizar_ticket' && !results[a.index]?.is_error)) {
+      filas.push({ etiqueta: 'Deshacer', valor: 'di «deshaz eso»' });
+    }
+    emit({ type: 'card', titulo: actions.length === 1 ? 'Hecho' : `Hecho · ${actions.length} cambios`, filas });
   }
 
   /** El usuario pide parar: corta la respuesta en curso y descarta la accion pendiente. */
@@ -134,9 +150,9 @@ export class Orchestrator {
 
   // ---------- Internos ----------
 
-  #startTurn(session, requestId, audio = false) {
+  #startTurn(session, requestId, audio = false, byUser = false) {
     session.currentTurn?.abort();
-    const turn = newTurn(requestId, audio);
+    const turn = newTurn(requestId, audio, byUser);
     session.currentTurn = turn;
     return turn;
   }
@@ -228,11 +244,21 @@ export class Orchestrator {
         results[k] = toolError(tu.id, `La herramienta ${tu.name} no existe.`);
         continue;
       }
+      if (this.#registry.isDisabled(tool.name)) {
+        await this.#log({ event: 'tool_call', sessionId: session.id, tool: tool.name, ok: false, error: 'herramienta desactivada' });
+        results[k] = toolError(tu.id, `La herramienta ${tool.name} está desactivada por el usuario.`);
+        continue;
+      }
       const parsed = tool.input.safeParse(tu.input ?? {});
       if (!parsed.success) {
         const detail = parsed.error.issues.map((i) => `${i.path.join('.') || 'entrada'}: ${i.message}`).join('; ');
         await this.#log({ event: 'tool_call', sessionId: session.id, tool: tool.name, ok: false, error: `parámetros no válidos: ${detail}` });
         results[k] = toolError(tu.id, `Parámetros no válidos (${detail}).`);
+        continue;
+      }
+
+      if (tool.risk === 'write' && this.#isDirect(tool, parsed.data, toolUses, turn, session)) {
+        results[k] = await this.#execDirect(tool, parsed.data, tu, session, emit);
         continue;
       }
 
@@ -295,7 +321,33 @@ export class Orchestrator {
     return turn.aborted ? 'aborted' : 'done';
   }
 
+  /**
+   * ¿Se ejecuta sin pedir confirmación? Solo si el usuario lo ha ordenado de forma explícita: herramienta de la lista
+   * permitida (cambios que se pueden deshacer o añadir), marca ordenExplicita, UN solo cambio en el mensaje (un ticket),
+   * turno nacido de un mensaje suyo y nada pendiente. Todo lo demás (lotes, borrados, horas...) sigue pidiendo confirmación.
+   */
+  #isDirect(tool, args, toolUses, turn, session) {
+    if (!this.#config.DIRECT_WRITE || !turn.byUser || session.pending) return false;
+    if (!(this.#config.DIRECT_WRITE_TOOLS ?? []).includes(tool.name) || args.ordenExplicita !== true) return false;
+    return toolUses.filter((u) => this.#registry.get(u.name)?.risk === 'write').length === 1;
+  }
+
+  async #execDirect(tool, args, tu, session, emit) {
+    let summary;
+    try {
+      summary = await tool.summarize(args, { session, user: session.user });
+    } catch (err) {
+      await this.#log({ event: 'tool_call', sessionId: session.id, tool: tool.name, ok: false, error: err.message });
+      return toolError(tu.id, err.message);
+    }
+    await this.#log({ event: 'direct_write', sessionId: session.id, user: session.user, tool: tool.name, args, summary });
+    const res = await this.#exec(tool, args, tu, session);
+    this.#resultCard([{ index: 0, toolName: tool.name, summary }], [res], emit);
+    return res;
+  }
+
   async #exec(tool, args, tu, session) {
+    if (this.#registry.isDisabled(tool.name)) return toolError(tu.id, `La herramienta ${tool.name} está desactivada por el usuario. No se ha hecho nada.`);
     const base = { sessionId: session.id, user: session.user, tool: tool.name, risk: tool.risk, args };
     if (tool.risk === 'write') {
       try {
@@ -307,7 +359,7 @@ export class Orchestrator {
     const started = this.#now();
     try {
       const content = serialize(await tool.execute(args, { session, user: session.user }));
-      await this.#log({ event: 'tool_call', ...base, ok: true, durationMs: this.#now() - started, result: content.slice(0, 500) });
+      await this.#log({ event: 'tool_call', ...base, ok: true, durationMs: this.#now() - started, result: resultText(content).slice(0, 500) });
       return { type: 'tool_result', tool_use_id: tu.id, content };
     } catch (err) {
       await this.#log({ event: 'tool_call', ...base, ok: false, durationMs: this.#now() - started, error: err.message });

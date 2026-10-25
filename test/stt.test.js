@@ -142,7 +142,7 @@ describe('dictado por el WebSocket del servidor', () => {
   };
 
   async function start(stt) {
-    const config = loadConfig({ PRAXON_TOKEN: LEGACY, PORT: '0', HOST: '127.0.0.1', PRAXON_USER: 'alex' });
+    const config = loadConfig({ PRAXON_TOKEN: LEGACY, PORT: '0', HOST: '127.0.0.1', PRAXON_USER: 'alex', ALLOW_LEGACY_TOKEN: 'true' });
     app = createApp(config, { audit: new MemoryAudit(), ...(stt ? { stt } : {}) });
     const port = await app.server.listen();
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { Authorization: `Bearer ${LEGACY}` } });

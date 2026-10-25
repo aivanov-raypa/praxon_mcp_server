@@ -24,7 +24,7 @@ class SpyMyraypa extends FakeMyraypa {
 
 async function start(env = {}) {
   const myraypa = new SpyMyraypa();
-  const config = loadConfig({ PRAXON_TOKEN: LEGACY, PORT: '0', HOST: '127.0.0.1', PRAXON_USER: 'alex', ...env });
+  const config = loadConfig({ PRAXON_TOKEN: LEGACY, PORT: '0', HOST: '127.0.0.1', PRAXON_USER: 'alex', ALLOW_LEGACY_TOKEN: 'true', ...env });
   app = createApp(config, { audit: new MemoryAudit(), myraypa });
   return { port: await app.server.listen(), myraypa };
 }

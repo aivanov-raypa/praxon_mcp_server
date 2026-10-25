@@ -52,6 +52,23 @@ export class SessionStore {
     return n;
   }
 
+  /**
+   * Olvida el contexto de un usuario (correo o nombre): vacía el historial de sus conversaciones abiertas y quita el resumen
+   * de sesiones anteriores que llevaban en el prompt. Las siguientes empiezan de cero. Devuelve cuántas sesiones tocó.
+   */
+  forget(owner) {
+    let n = 0;
+    for (const s of this.#sessions.values()) {
+      if (s.email !== owner && s.user !== owner) continue;
+      s.history.length = 0;
+      s.pending = null;
+      s.continuidad = null;
+      s.summarizedAtTurns = 0;
+      n++;
+    }
+    return n;
+  }
+
   get size() {
     return this.#sessions.size;
   }

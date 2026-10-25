@@ -41,8 +41,8 @@ describe('vigilante de tickets nuevos', () => {
     t.myraypa.tickets.push(ticket('899', T0 - 10 * MIN), ticket('900', T0 + MIN)); // 899 es anterior al arranque
     t.at(T0 + 10 * MIN);
     const r = await t.watcher.tick();
-    expect(r).toEqual({ nuevos: 1, revisados: 1 });
-    expect(model.calls[0].system).toContain('SOLO de tickets recién creados');
+    expect(r).toEqual({ nuevos: 1, comentados: 0, revisados: 1 });
+    expect(model.calls[0].system).toContain('Esta revisión es SOLO de estos tickets');
     expect(model.calls[0].system).toContain('id 900');
     expect(model.calls[0].system).not.toContain('id 899');
     expect(t.store.pending()).toHaveLength(1);
@@ -56,12 +56,12 @@ describe('vigilante de tickets nuevos', () => {
     const t = build(model);
     t.myraypa.tickets.push(ticket('900', T0 + MIN));
     t.at(T0 + 2 * MIN); // lleva 1 min: aún no
-    expect(await t.watcher.tick()).toEqual({ nuevos: 0, revisados: 0 });
+    expect(await t.watcher.tick()).toEqual({ nuevos: 0, comentados: 0, revisados: 0 });
     expect(model.calls).toHaveLength(0);
     t.at(T0 + 5 * MIN);
     expect((await t.watcher.tick()).revisados).toBe(1);
     t.at(T0 + 10 * MIN);
-    expect(await t.watcher.tick()).toEqual({ nuevos: 0, revisados: 0 });
+    expect(await t.watcher.tick()).toEqual({ nuevos: 0, comentados: 0, revisados: 0 });
     expect(model.calls).toHaveLength(2); // solo la primera revisión (dos pasos del modelo)
   });
 
@@ -98,7 +98,7 @@ describe('vigilante de tickets nuevos', () => {
       expect((await t.watcher.tick()).revisados).toBe(0);
       expect(t.rev.isDone('900')).toBe(i === 2);
     }
-    expect(await t.watcher.tick()).toEqual({ nuevos: 0, revisados: 0 });
+    expect(await t.watcher.tick()).toEqual({ nuevos: 0, comentados: 0, revisados: 0 });
   });
 
   it('no hace nada si ya hay una revisión en curso', async () => {

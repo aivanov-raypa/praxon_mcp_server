@@ -1,7 +1,10 @@
+import { ReviewScope } from './scope.js';
+
 /**
  * Vigilante de tickets nuevos: cada pocos minutos pregunta a MyRAYPA qué tickets se han creado desde la marca de corte
  * y revisa solo los nuevos que ya "se han asentado" (llevan unos minutos creados, por si se edita justo después).
  * No necesita que MyRAYPA avise a Praxon, y al arrancar recoge lo que se creó mientras estaba apagado.
+ * También vuelve a mirar un ticket ya revisado si alguien lo comenta después (con enfriamiento y máximo de veces).
  * La revisión de cada lote es la misma de siempre: solo consulta y propone, nada se ejecuta sin aprobación.
  */
 export class TicketWatcher {
@@ -10,12 +13,14 @@ export class TicketWatcher {
   #reviewed;
   #config;
   #now;
+  #scope;
   #onBriefing;
   #timer = null;
   #first = null;
   #busy = false;
 
-  constructor({ myraypa, triage, reviewed, config, now = Date.now, onBriefing = () => {} }) {
+  constructor({ myraypa, triage, reviewed, config, scope = null, now = Date.now, onBriefing = () => {} }) {
+    this.#scope = scope ?? new ReviewScope({ myraypa, reviewed, config, now });
     this.#myraypa = myraypa;
     this.#triage = triage;
     this.#reviewed = reviewed;
@@ -45,17 +50,19 @@ export class TicketWatcher {
       const tickets = all.filter((t) => t.creado);
 
       const ready = tickets.filter((t) => !this.#reviewed.isDone(t.id) && now - Date.parse(t.creado) >= settleMs);
-      const batch = ready.slice(0, this.#config.TRIAGE_WATCH_BATCH);
+      // Los nuevos primero; después, los ya revisados con un comentario nuevo. Todo en un lote acotado.
+      const comentados = await this.#scope.commented().catch((err) => (console.error('[vigilante]', 'comentarios:', err.message), []));
+      const batch = [...ready.map((t) => ({ id: t.id, titulo: t.titulo, proyecto: t.proyecto })), ...comentados].slice(0, this.#config.TRIAGE_WATCH_BATCH);
       let revisados = 0;
       if (batch.length) {
         try {
           const b = await this.#triage.runTickets({
             user: this.#config.PRAXON_USER,
-            tickets: batch.map((t) => ({ id: t.id, titulo: t.titulo, proyecto: t.proyecto })),
-            trigger: 'nuevo',
+            tickets: batch,
+            trigger: batch.every((t) => t.motivo === 'comentario nuevo') ? 'comentario' : 'nuevo',
           });
           if (b.omitida) return { omitido: true };
-          for (const t of batch) this.#reviewed.markSeen(t.id, now);
+          await this.#scope.markDone(batch);
           revisados = batch.length;
           if (b.acciones?.length) this.#onBriefing(b);
         } catch (err) {
@@ -65,7 +72,7 @@ export class TicketWatcher {
       }
       this.#reviewed.advance(this.#resolvedUntil(tickets));
       await this.#reviewed.save();
-      return { nuevos: ready.length, revisados };
+      return { nuevos: ready.length, comentados: comentados.length, revisados };
     } finally {
       this.#busy = false;
     }

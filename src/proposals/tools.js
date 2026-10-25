@@ -1,11 +1,12 @@
 import { z } from 'zod';
 import { defineTool } from '../tools/registry.js';
+import { ticketId } from '../connectors/myraypa/tools/shared.js';
 
 /**
  * Herramientas de voz sobre las propuestas de la revision automatica: consultarlas y aplicar una.
  * Aplicar una pasa por la confirmacion normal de la conversacion, ademas de la comprobacion de que nada ha cambiado.
  */
-export function proposalTools({ store, triage, now = () => new Date() }) {
+export function proposalTools({ store, triage, client = null, scope = null, config = {}, onReviewed = () => {}, now = () => new Date() }) {
   const connector = 'praxon';
   const find = (briefingId, actionId) => store.get(briefingId)?.acciones.find((a) => a.id === actionId);
   return [
@@ -41,6 +42,39 @@ export function proposalTools({ store, triage, now = () => new Date() }) {
         return { hecho: true };
       },
     }),
+    ...(client && triage
+      ? [
+          defineTool({
+            connector,
+            name: 'revisar_tickets',
+            risk: 'read',
+            description:
+              'Pide a la revisión automática que analice unos tickets concretos que el usuario ha nombrado (no sirve para recorrer un backlog). Se hace en segundo plano: las propuestas quedan pendientes en la pantalla Trabajo y la app avisa al terminar. Máximo unos pocos tickets por vez; cada revisión consume recursos, así que no la lances por tu cuenta. Localiza antes los ids con listar_tickets.',
+            input: z.object({ ticketIds: z.array(ticketId).min(1).max(10) }),
+            execute: async ({ ticketIds }, { session }) => {
+              const max = config.TRIAGE_MAX_TICKETS ?? 6;
+              const ids = [...new Set(ticketIds)];
+              if (ids.length > max) throw new Error(`Solo puedo revisar ${max} tickets por vez. Dime cuáles son los más importantes.`);
+              if (triage.running) return { iniciada: false, motivo: 'Ya hay una revisión en curso; inténtalo cuando termine.' };
+              const tickets = [];
+              for (const id of ids) {
+                const t = await client.getTicket(id);
+                tickets.push({ id: t.id, titulo: t.titulo, proyecto: t.proyecto?.nombre ?? t.proyecto });
+              }
+              const owner = session?.email ?? session?.user;
+              triage
+                .runTickets({ user: session?.user ?? config.PRAXON_USER, tickets, trigger: 'manual' })
+                .then(async (b) => {
+                  if (b.omitida) return;
+                  await scope?.markDone(tickets);
+                  onReviewed(b, owner);
+                })
+                .catch((err) => console.error('[revisar_tickets]', err.message));
+              return { iniciada: true, tickets: tickets.map((t) => t.titulo), aviso: 'La revisión tarda un minuto o dos. Avisa al usuario de que lo hará en segundo plano.' };
+            },
+          }),
+        ]
+      : []),
     defineTool({
       connector,
       name: 'hora_actual',

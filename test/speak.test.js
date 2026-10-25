@@ -10,7 +10,7 @@ let app;
 afterEach(async () => app?.server.close());
 
 async function start(voice) {
-  const config = loadConfig({ PRAXON_TOKEN: TOKEN, PORT: '0', HOST: '127.0.0.1', PRAXON_USER: 'alex' });
+  const config = loadConfig({ PRAXON_TOKEN: TOKEN, PORT: '0', HOST: '127.0.0.1', PRAXON_USER: 'alex', ALLOW_LEGACY_TOKEN: 'true' });
   app = createApp(config, { audit: new MemoryAudit(), voice });
   const port = await app.server.listen();
   const ws = await new Promise((resolve, reject) => {

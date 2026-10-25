@@ -135,3 +135,17 @@ Servidor → app: `agents { canMerge, canRequestChanges, items[] }` (cada item: 
 ## Consumos
 
 App → servidor: `{ "type": "usage_get", "refresh"?: true }`. Servidor → app: `usage` con `generado`, `praxon` (serie diaria de 14 días con tokens, llamadas, caracteres de voz y segundos de dictado; totales; tokens por modelo), y las tarjetas `elevenlabs`, `github` y `anthropic`, cada una con `estado` (`ok`, `sin_configurar` o `error` con `mensaje`). Los datos externos se cachean `USAGE_CACHE_MINUTES` minutos; `refresh` ignora la caché.
+
+## Paneles del menú (`panel_get`, `panel_action`)
+
+El menú de la app tiene cinco secciones propias de Praxon, que son una lista estructurada que construye el servidor (`src/panels.js`): `hoy` (lo que Praxon tiene pendiente: pull requests listos, propuestas y recordatorios), `audit`, `devices`, `tools` y `status`. No hay pantallas que repliquen MyRAYPA (tickets, proyectos), el correo ni el calendario: eso se consulta hablando con Praxon.
+
+App → servidor: `{ "type": "panel_get", "panel": "audit", "filtros"?: { "event": "tool_call", "texto": "…" } }`. Servidor → app: `panel` con `titulo`, `resumen`, `filtros` (cada uno con `id`, `etiqueta`, `tipo` `opciones` o `texto`, `actual` y `opciones`), `secciones` (`titulo?` y `filas` con `id`, `titulo`, `detalle`, `estado` `ok|aviso|error|info` y `acciones`) y `vacio`. Los valores de los filtros se validan en el servidor y se devuelven ya saneados en `actual`. Si el usuario no puede ver el panel: `panel_error` con `message`.
+
+Acciones: `{ "type": "panel_action", "panel": "devices|tools", "accion": "…", "id": "…" }` y respuesta `panel_action_result { panel, accion, id, ok, mensaje }`. Lista cerrada: `devices` → `revocar` (solo dispositivos del propio usuario); `tools` → `activar` y `desactivar`; `status` → `olvidar_contexto` (borra los resúmenes de sesiones anteriores del usuario y vacía sus conversaciones abiertas). Cada cambio pide confirmación en pantalla antes de enviarse, y el servidor lo valida y audita de nuevo.
+
+Permisos: `hoy` lo ve cualquier dispositivo emparejado. `audit`, `devices`, `tools` y `status`, y las acciones, solo quien puede aprobar (`MERGE_ALLOWED_USERS`); un intento sin permiso queda en el log como `approval_denied`.
+
+Las filas pueden llevar además `chips` (`[{texto, estado}]`) e `interruptor` (`{activo, confirmarAlActivar?}`): la app lo pinta como un switch y, al pulsarlo, envía `activar` o `desactivar`; si existe `confirmarAlActivar`, pide confirmación antes de activar. Las secciones pueden llevar `resumen`. El panel `tools` agrupa por conector (myraypa, github, google, praxon).
+
+Herramientas desactivadas (`TOOLS_DISABLED_PATH`, por defecto `./data/herramientas-desactivadas.json`): una herramienta apagada deja de ofrecerse al modelo y de ejecutarse, incluidas las confirmaciones y propuestas que ya estuvieran pendientes. Desactivar solo restringe; no se puede crear ni elevar el riesgo de ninguna herramienta.

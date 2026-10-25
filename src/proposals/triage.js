@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { buildTriagePrompt } from '../prompts.js';
+import { serializeResult } from '../tools/result.js';
 
 const MAX_RESULT_CHARS = 8000;
 
@@ -54,7 +55,7 @@ const proposeInput = z.object({
 const summaryInput = z.object({ resumen: z.string().trim().min(1).max(2000) });
 
 const stableArgs = (o) => JSON.stringify(o, Object.keys(o).sort());
-const result = (id, content, isError = false) => ({ type: 'tool_result', tool_use_id: id, content: typeof content === 'string' ? content : JSON.stringify(content), ...(isError && { is_error: true }) });
+const result = (id, content, isError = false) => ({ type: 'tool_result', tool_use_id: id, content: typeof content === 'string' || Array.isArray(content) ? content : JSON.stringify(content), ...(isError && { is_error: true }) });
 
 /**
  * Revision autonoma: el modelo lee los tickets con las herramientas de consulta, analiza y deja un resumen con
@@ -72,9 +73,14 @@ export class Triage {
   #busy = new Set();
 
   #memory;
+  #ticketLog;
 
-  constructor({ model, registry, audit, store, config, now = Date.now, memory = null }) {
+  #scope;
+
+  constructor({ model, registry, audit, store, config, now = Date.now, memory = null, ticketLog = null, scope = null }) {
+    this.#scope = scope;
     this.#memory = memory;
+    this.#ticketLog = ticketLog;
     this.#model = model;
     this.#registry = registry;
     this.#audit = audit;
@@ -85,6 +91,12 @@ export class Triage {
 
   get running() {
     return this.#running;
+  }
+
+  /** Motivo por el que no se debe proponer esto para el ticket (ya descartado, ya propuesto hace poco...), o null. */
+  #bloqueo(ticketId, key = null) {
+    if (!this.#ticketLog || ticketId == null) return null;
+    return this.#ticketLog.blockReason(String(ticketId), key, { dismissDays: this.#config.TRIAGE_DISMISS_DAYS ?? 90, cooldownDays: this.#config.TRIAGE_COOLDOWN_DAYS ?? 14 });
   }
 
   #allowed() {
@@ -108,6 +120,20 @@ export class Triage {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.#config.TRIAGE_TIMEOUT_MS);
     try {
+      // Sin tickets indicados, una revisión manual o programada se limita a lo nuevo (tickets creados o comentados desde la
+      // última revisión), con tope. Nunca recorre el backlog; si no hay nada nuevo, ni siquiera llama al modelo.
+      let scoped = null;
+      if (!focus && this.#scope) {
+        const p = await this.#scope.pending({ limit: this.#config.TRIAGE_MAX_TICKETS, settle: false });
+        if (!p.batch.length) {
+          const vacio = { id, createdAt: new Date(started).toISOString(), trigger, resumen: 'No hay tickets nuevos ni comentarios nuevos que revisar desde la última revisión.', acciones: [] };
+          if (trigger === 'manual') await this.#store.add(vacio);
+          await this.#log({ event: 'triage_run', briefingId: id, trigger, acciones: 0, tickets: [], ms: this.#now() - started });
+          return vacio;
+        }
+        scoped = p.batch;
+        focus = p.batch;
+      }
       const reads = (t) => t.risk === 'read' && (t.connector === 'myraypa' || t.connector === 'github');
       const maxCode = this.#config.TRIAGE_CODE_MAX_CALLS ?? 12;
       const code = maxCode > 0 && this.#registry.list().some((t) => t.connector === 'github');
@@ -116,6 +142,8 @@ export class Triage {
       const tools = [...this.#registry.forModel(offered), ...INTERNAL_TOOLS, ...(canAgent ? [SUGGEST_TOOL] : [])];
       const sugerencias = new Map();
       let codeCalls = 0;
+      let imageCalls = 0;
+      const maxImages = this.#config.TRIAGE_MAX_IMAGES ?? 3;
       const messages = [{ role: 'user', content: focus ? 'Revisa ahora los tickets nuevos indicados.' : 'Haz la revisión ahora.' }];
       const session = { id: `revision-${id}`, user };
       const acciones = [];
@@ -168,13 +196,16 @@ export class Triage {
               results.push(result(tu.id, `Parámetros no válidos (${parsed.error.issues.map((i) => i.message).join('; ')}).`, true));
               continue;
             }
+            if (tool.name === 'myraypa_ver_imagen_ticket' && ++imageCalls > maxImages) {
+              results.push(result(tu.id, `Has llegado al límite de ${maxImages} imágenes en esta revisión. Continúa con lo que ya has visto.`, true));
+              continue;
+            }
             if (tool.connector === 'github' && ++codeCalls > maxCode) {
               results.push(result(tu.id, `Has llegado al límite de ${maxCode} consultas de código en esta revisión. Continúa solo con los datos que ya tienes.`, true));
               continue;
             }
             try {
-              const s = JSON.stringify((await tool.execute(parsed.data, { session, user })) ?? { ok: true });
-              results.push(result(tu.id, s.length <= MAX_RESULT_CHARS ? s : JSON.stringify({ recortado: true, texto: s.slice(0, MAX_RESULT_CHARS) })));
+              results.push(result(tu.id, serializeResult(await tool.execute(parsed.data, { session, user }), MAX_RESULT_CHARS)));
             } catch (err) {
               results.push(result(tu.id, err.message, true));
             }
@@ -186,7 +217,9 @@ export class Triage {
       await this.#agrupar(acciones, sugerencias, session, user);
       const briefing = { id, createdAt: new Date(started).toISOString(), trigger, resumen, acciones };
       // En la revisión de tickets nuevos solo se guarda si hay algo que aprobar: así no se llena la bandeja de avisos vacíos.
-      if (focus ? acciones.length : resumen || acciones.length) await this.#store.add(briefing);
+      if (focus && !scoped ? acciones.length : resumen || acciones.length) await this.#store.add(briefing);
+      if (scoped) await this.#scope.markDone(scoped);
+      await this.#ticketLog?.noteProposed(acciones.map((a) => a.ticketId));
       await this.#log({ event: 'triage_run', briefingId: id, trigger, acciones: acciones.length, ...(focus && { tickets: focus.map((f) => f.id) }), ms: this.#now() - started });
       return briefing;
     } catch (err) {
@@ -210,7 +243,7 @@ export class Triage {
     const { herramienta, parametros, motivo } = p.data;
     if (acciones.length >= this.#config.TRIAGE_MAX_ACTIONS) return [`Ya has propuesto el máximo (${this.#config.TRIAGE_MAX_ACTIONS}). Termina con el resumen.`, true];
     const tool = this.#registry.get(herramienta);
-    if (!tool || tool.risk !== 'write' || !this.#allowed().has(herramienta)) {
+    if (!tool || tool.risk !== 'write' || this.#registry.isDisabled(herramienta) || !this.#allowed().has(herramienta)) {
       return [`La herramienta ${herramienta} no está permitida para propuestas. Permitidas: ${[...this.#allowed()].join(', ')}.`, true];
     }
     const parsed = tool.input.safeParse(parametros);
@@ -225,6 +258,9 @@ export class Triage {
     const repetida = [...this.#store.pending().map((x) => x.action), ...acciones].some((a) => a.herramienta === herramienta && stableArgs(a.args) === stableArgs(parsed.data));
     if (repetida) return ['Esa acción ya está propuesta y pendiente. No la repitas.', true];
     const ticketId = parsed.data.ticketId != null ? String(parsed.data.ticketId) : null;
+    // Un ticket que ya se propuso en esta misma revisión puede recibir más acciones; el bloqueo cuenta lo anterior.
+    const bloqueo = this.#bloqueo(ticketId, key);
+    if (bloqueo) return [bloqueo, true];
     acciones.push({ id: randomUUID(), herramienta, args: parsed.data, resumen, motivo, estado: 'pendiente', key, ticketId });
     return [{ ok: true, propuesta: resumen }, false];
   }
@@ -239,7 +275,7 @@ export class Triage {
     const lanzar = this.#registry.get(AGENT_TOOL);
     const ids = [];
     for (const a of acciones) if (a.ticketId && !ids.includes(a.ticketId)) ids.push(a.ticketId);
-    for (const id of sugerencias.keys()) if (!ids.includes(id)) ids.push(id);
+    for (const id of sugerencias.keys()) if (!ids.includes(id) && !this.#bloqueo(id)) ids.push(id);
     const titulos = new Map();
     for (const id of ids) {
       let titulo = null;
@@ -261,6 +297,8 @@ export class Triage {
       if (!parsed.success) continue;
       const repetida = [...this.#store.pending().map((x) => x.action), ...acciones].some((a) => a.herramienta === AGENT_TOOL && stableArgs(a.args) === stableArgs(parsed.data));
       if (repetida) continue;
+      // Sin acciones propias en esta revisión (solo sugerencia), un ticket ya resuelto antes no recibe la opción de agente.
+      if (this.#ticketLog?.blockReason(id, `${AGENT_TOOL}|${stableArgs(parsed.data)}`, { dismissDays: this.#config.TRIAGE_DISMISS_DAYS ?? 90, cooldownDays: 0 })) continue;
       let resumen;
       try {
         resumen = await lanzar.summarize(parsed.data, { session, user });
@@ -286,13 +324,14 @@ export class Triage {
 
   #permitida(action) {
     const tool = this.#registry.get(action.herramienta);
-    if (!tool || tool.risk !== 'write') return false;
+    if (!tool || tool.risk !== 'write' || this.#registry.isDisabled(tool.name)) return false;
     return action.origen === 'servidor' || this.#allowed().has(action.herramienta);
   }
 
   async #settle(briefing, action, estado, mensaje, user) {
     Object.assign(action, { estado, mensaje, decididaEn: new Date(this.#now()).toISOString() });
     await this.#store.save();
+    if (estado === 'descartada' || estado === 'ejecutada') await this.#ticketLog?.noteResolved(action.ticketId, action.key);
     await this.#log({ event: 'proposal_decision', user, briefingId: briefing.id, actionId: action.id, tool: action.herramienta, estado });
     return { ok: estado === 'ejecutada' || estado === 'descartada', estado, mensaje };
   }
@@ -342,7 +381,10 @@ export class Triage {
     if (action.estado !== 'pendiente' || this.#busy.has(actionId)) return { ok: false, estado: action.estado, mensaje: 'Esa propuesta ya se ha resuelto.' };
     const ageMs = this.#now() - Date.parse(briefing.createdAt);
     if (ageMs > this.#config.PROPOSAL_TTL_HOURS * 3_600_000) return this.#settle(briefing, action, 'caducada', 'La propuesta ha caducado. Pide una revisión nueva.', user);
-    if (!accepted) return this.#settle(briefing, action, 'descartada', 'Descartada.', user);
+    if (!accepted) {
+      await this.#ticketLog?.noteDismissed(action.ticketId);
+      return this.#settle(briefing, action, 'descartada', 'Descartada.', user);
+    }
 
     this.#busy.add(actionId);
     try {
@@ -368,6 +410,8 @@ export class Triage {
     if (pendientes.some((a) => this.#busy.has(a.id))) return { ok: false, mensaje: 'Esa propuesta se está procesando.', resultados: [] };
 
     const elegidas = pendientes.filter((a) => aprobar.includes(a.id));
+    // Descartar la propuesta entera (no marcar nada) es el "no" del usuario sobre ese ticket.
+    if (!elegidas.length) await this.#ticketLog?.noteDismissed(pendientes[0].ticketId);
     const resultados = [];
     for (const a of pendientes.filter((x) => !elegidas.includes(x))) resultados.push({ actionId: a.id, ...(await this.#settle(briefing, a, 'descartada', 'No seleccionada.', user)) });
     for (const a of elegidas) this.#busy.add(a.id);

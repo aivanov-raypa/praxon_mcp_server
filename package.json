@@ -9,6 +9,7 @@
     "start": "node --env-file-if-exists=.env src/index.js",
     "dev": "node --watch --env-file-if-exists=.env src/index.js",
     "pair": "node --env-file-if-exists=.env src/pair.js",
+    "google:auth": "node --env-file-if-exists=.env src/google-auth.js",
     "check-model": "node --env-file-if-exists=.env src/check-model.js",
     "triage-now": "node --env-file-if-exists=.env src/triage-now.js",
     "mock": "node --env-file-if-exists=.env mock/server.js",

@@ -3,15 +3,17 @@ import WebSocket from 'ws';
 import { createApp } from '../src/app.js';
 import { MemoryAudit } from '../src/audit/log.js';
 import { loadConfig } from '../src/config.js';
+import { TicketLog } from '../src/proposals/ticketlog.js';
 import { ProposalStore } from '../src/proposals/store.js';
+import { ReviewedStore } from '../src/proposals/reviewed.js';
 
 const TOKEN = 'token-de-pruebas-1234';
 let app;
 afterEach(async () => app?.server.close());
 
 async function start() {
-  const config = loadConfig({ PRAXON_TOKEN: TOKEN, PORT: '0', HOST: '127.0.0.1', PRAXON_USER: 'alex' });
-  app = createApp(config, { audit: new MemoryAudit(), proposalStore: new ProposalStore(null) });
+  const config = loadConfig({ PRAXON_TOKEN: TOKEN, PORT: '0', HOST: '127.0.0.1', PRAXON_USER: 'alex', ALLOW_LEGACY_TOKEN: 'true' });
+  app = createApp(config, { audit: new MemoryAudit(), proposalStore: new ProposalStore(null), ticketLog: new TicketLog(null), reviewed: new ReviewedStore(null) });
   return app.server.listen();
 }
 const open = (port) =>
@@ -40,6 +42,8 @@ describe('propuestas por WebSocket', () => {
     expect(await waitFor(ws, (m) => m.type === 'proposals')).toMatchObject({ pendientes: 0 });
 
     ws.messages.length = 0;
+    // Una revisión manual solo mira lo nuevo desde el arranque, nunca el backlog.
+    app.myraypa.tickets.find((t) => t.id === '214').creado = new Date().toISOString();
     send(ws, { type: 'proposals_run' });
     const v = await waitFor(ws, (m) => m.type === 'proposals' && m.pendientes === 1 && !m.running);
     const accion = v.briefings[0].acciones[0];

@@ -86,6 +86,7 @@ Escrituras: autonomía `tickets` o superior; todo queda en el `activityLog` con 
 |---|---|---|
 | GET | `/assistant/tickets/:id/adjuntos` | Adjuntos del ticket y de sus comentarios, numerados (`n`, nombre, tipo, tamaño, origen, `legible`) |
 | GET | `/assistant/tickets/:id/adjuntos/:ref` | Texto de un adjunto (`ref` = número o parte del nombre; `?desde=` para paginar). PDF, Word, Excel/CSV y texto; 415 si no es legible, 413 si pesa más de 15 MB |
+| POST | `/assistant/tickets/:id/adjuntos` | Adjunta un documento (`nombre`, `contenidoBase64`, `destino` ticket o comentario, `comentario?`). Solo `.md`, `.txt` o `.pdf` (se comprueba por sus bytes), máx. 5 MB, requiere autonomía `tickets`; la clave queda bajo `ticket_assets/`. El asistente solo añade: no borra ni sustituye |
 | GET | `/assistant/tickets/:id/detalle` | Todo el ticket: horas, etiquetas, checklist, campos, participantes, subtareas |
 | PATCH | `/assistant/tickets/:id/fechas` | `{ inicio?, vencimiento?, estimadoHoras? }` (`null` borra) |
 | POST | `/assistant/tickets/:id/horas` | `{ horas (0-24], nota?, fecha?, usuario? }` |
@@ -118,12 +119,15 @@ Los móviles se emparejan desde MyRAYPA (Configuración > Asistente de voz > Dis
 1. El administrador pulsa "Emparejar un móvil": MyRAYPA genera un código de 8 caracteres de un solo uso (caduca a los 5 minutos, se guarda su hash) y lo muestra como QR `praxon://pair?v=2&u=<wss://…/ws>&c=<código>`.
 2. La app escanea el QR y hace `POST <servidor Praxon>/pair/redeem {code, deviceName}` (límite de 10 intentos por IP cada 10 minutos). El servidor Praxon lo canjea en MyRAYPA con su credencial de servicio y devuelve a la app un token propio (`pxd_…`). MyRAYPA solo guarda su hash.
 3. En cada conexión el servidor Praxon verifica el token en MyRAYPA (`POST /api/assistant/devices/verify`, caché de 60 s) y actúa como el usuario del dispositivo: las llamadas a la API llevan `X-Assistant-User: <email>`. MyRAYPA solo lo acepta si ese usuario tiene un dispositivo activo.
-4. Revocar un dispositivo en MyRAYPA corta su conexión en menos de un minuto.
+4. Panel Móviles de la app: `GET /api/assistant/devices/mine` lista los dispositivos activos del usuario que actúa y `POST /api/assistant/devices/:id/revoke` revoca uno. Ambos solo ven y tocan los dispositivos de ese usuario; si el id es de otro, responde 404.
+5. Revocar un dispositivo en MyRAYPA corta su conexión en menos de un minuto.
 
 Variables de entorno:
 
 - MyRAYPA: `ASSISTANT_PUBLIC_URL` (dirección pública del servidor Praxon, `wss://praxon.ejemplo.com/ws`; si falta, la página pide escribirla).
-- Praxon: `ALLOW_LEGACY_TOKEN` (por defecto `true`; el `PRAXON_TOKEN` compartido y el QR de la consola son solo para desarrollo. En producción, `false`).
+- Praxon: `ALLOW_LEGACY_TOKEN` (por defecto `false`; el `PRAXON_TOKEN` compartido y el QR de la consola son solo para desarrollo. Déjalo en `false`).
+- Praxon: `MERGE_ALLOWED_USERS` (correos separados por comas que pueden fusionar PRs o pedir cambios; vacío = cualquier dispositivo emparejado), `AUTH_FAIL_MAX` / `AUTH_FAIL_WINDOW_MINUTES` (bloqueo por IP tras intentos fallidos), `AUDIT_TEXT_MAX_CHARS` (texto del usuario que se guarda en el log; 0 = nada) y `AUDIT_RETENTION_DAYS`.
+- Control de acceso: el asistente solo ve proyectos y tickets a los que tiene acceso el usuario del dispositivo (propietario o miembro del proyecto; participante, asignado o creador del ticket). El usuario de servicio (`ASSISTANT_USER_EMAIL`) debe ser miembro de los proyectos que Praxon deba vigilar sin dispositivo.
 
 Limitaciones conocidas: las propuestas de la revisión automática se calculan y se ejecutan como el usuario de servicio (`ASSISTANT_USER_EMAIL`), no por usuario; cualquier móvil emparejado las ve y puede aprobarlas. El emparejamiento está limitado a administradores porque la autorización del asistente es por proyecto habilitado, no por pertenencia al proyecto.
 
@@ -131,3 +135,9 @@ Limitaciones conocidas: las propuestas de la revisión automática se calculan y
 ## Acceso al código (`codigo`)
 
 `GET /assistant/projects` incluye `codigo` (booleano) por proyecto. El conector `github` solo consulta el repositorio de un proyecto si tiene `repo` y `codigo !== false`; el modelo indica el proyecto, nunca el repositorio. En MyRAYPA se controla con `aiAssistant.codeAccess` (por proyecto, valor por defecto `true`) y los valores por defecto globales en Configuración › Asistente de voz (`/api/assistant-admin/defaults`).
+
+## Contexto, comentarios e imágenes (asistente)
+
+- `aiAssistant.context` (proyecto): texto breve que explica qué módulo es el repositorio; llega al modelo como `proyecto.contexto` en el detalle del ticket.
+- `GET /tickets` acepta `comentadosDesde` (ISO) y cada ticket devuelve `ultimoComentario { fecha, delAsistente }`: base de la re-revisión por comentario nuevo.
+- Imágenes: las `<img>` del cuerpo de descripción/comentarios no son adjuntos. El servidor deriva la clave del bucket propio (solo `ticket_assets/`), comprueba la firma del archivo (png/jpeg/gif/webp, máx. 5 MB) y nunca descarga URLs arbitrarias. Herramienta: `ver_imagen_ticket`.

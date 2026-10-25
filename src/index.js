@@ -11,8 +11,16 @@ try {
   process.exit(1);
 }
 
-const { server, registry, scheduler, watcher, agents, tracker } = createApp(config);
+const { server, registry, scheduler, watcher, agents, tracker, audit, reminders } = createApp(config);
 const port = await server.listen();
+reminders.start();
+if (config.AUDIT_RETENTION_DAYS) {
+  const borradas = await audit.prune?.(config.AUDIT_RETENTION_DAYS).catch(() => 0);
+  if (borradas) console.log(`Auditoría: ${borradas} líneas anteriores a ${config.AUDIT_RETENTION_DAYS} días eliminadas.`);
+}
+if (config.HOST === '0.0.0.0' && !config.PRAXON_PUBLIC_URL?.startsWith('wss://')) {
+  console.warn('Aviso: el servidor escucha en todas las interfaces sin TLS. Pon HOST a la IP interna concreta o publícalo detrás de un proxy con wss://.');
+}
 
 console.log(`${config.ASSISTANT_NAME}: servidor escuchando en el puerto ${port}`);
 console.log(`Modelo: ${config.MODEL_PROVIDER} | MyRAYPA: ${config.MYRAYPA_MODE} | GitHub: ${config.GITHUB_MODE} | Voz: ${config.VOICE_PROVIDER}`);
@@ -49,6 +57,7 @@ if (config.MODEL_PROVIDER === 'scripted') console.log('Aviso: modelo guionizado 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, async () => {
     scheduler.stop();
+    reminders.stop();
     watcher.stop();
     agents?.stop();
     await tracker.save().catch(() => {});

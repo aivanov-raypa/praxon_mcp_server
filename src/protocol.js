@@ -49,6 +49,19 @@ export const clientMessage = z.discriminatedUnion('type', [
     actionId: z.string().min(1).max(100),
     accepted: z.boolean(),
   }),
+  // Paneles del menú (Hoy, Auditoría, Dispositivos, Herramientas, Estado). Ver panels.js.
+  z.object({
+    type: z.literal('panel_get'),
+    panel: z.enum(['hoy', 'audit', 'devices', 'tools', 'status', 'memoria']),
+    filtros: z.record(z.string().max(40), z.string().max(80)).optional(),
+  }),
+  z.object({
+    type: z.literal('panel_action'),
+    panel: z.enum(['devices', 'tools', 'status', 'memoria']),
+    accion: z.string().min(1).max(40),
+    id: z.string().min(1).max(100),
+    valor: z.string().max(80).optional(),
+  }),
   // Panel de consumos (solo lectura). refresh=true ignora la cache.
   z.object({ type: z.literal('usage_get'), refresh: z.boolean().optional() }),
   // Agentes de desarrollo. La fusion solo existe aqui (nunca como herramienta del modelo): va atada al SHA revisado

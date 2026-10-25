@@ -6,10 +6,12 @@ import { z } from 'zod';
  * Niveles de riesgo permitidos por voz:
  *   read  -> se ejecuta siempre.
  *   write -> modifica datos reales: exige summarize() y confirmacion explicita del usuario.
+ *   local -> solo toca datos propios de Praxon (recordatorios, deshacer): se ejecuta sin confirmar y queda auditado.
+ *         Nunca se ofrece a la revision automatica (solo ve herramientas read de MyRAYPA y GitHub).
  * Lo irreversible o critico (mergear, desplegar, borrar, produccion) NO se puede registrar:
  * solo se hace desde la mesa.
  */
-export const RISKS = ['read', 'write'];
+export const RISKS = ['read', 'write', 'local'];
 
 /** Crea una herramienta con el nombre prefijado por su conector: myraypa_listar_tickets. */
 export function defineTool({ connector, name, ...rest }) {
@@ -18,6 +20,17 @@ export function defineTool({ connector, name, ...rest }) {
 
 export class ToolRegistry {
   #tools = new Map();
+  #control = null;
+
+  /** Control de herramientas desactivadas (ver tools/control.js). */
+  setControl(control) {
+    this.#control = control;
+    return this;
+  }
+
+  isDisabled(name) {
+    return Boolean(this.#control?.isDisabled(name));
+  }
 
   register(tool) {
     if (!/^[a-z][a-z0-9_]{2,63}$/.test(tool.name ?? '')) throw new Error(`Nombre de herramienta no valido: ${tool.name}`);
@@ -51,7 +64,7 @@ export class ToolRegistry {
 
   /** Definiciones en el formato de herramientas de la API del modelo. `filter` limita cuales se ofrecen. */
   forModel(filter = () => true) {
-    return this.list().filter(filter).map((t) => {
+    return this.list().filter((t) => !this.isDisabled(t.name)).filter(filter).map((t) => {
       const { $schema, ...input_schema } = z.toJSONSchema(t.input);
       return { name: t.name, description: t.description, input_schema };
     });

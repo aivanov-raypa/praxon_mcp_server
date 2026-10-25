@@ -66,6 +66,12 @@ export class RateLimiter {
     this.#now = now;
   }
 
+  /** true si la clave ya agotó sus intentos (no cuenta uno nuevo). */
+  blocked(key) {
+    const t = this.#now();
+    return (this.#hits.get(key) ?? []).filter((x) => t - x < this.#windowMs).length >= this.#max;
+  }
+
   /** true si se permite el intento (y lo cuenta). */
   take(key) {
     const t = this.#now();

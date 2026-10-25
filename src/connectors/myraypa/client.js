@@ -30,6 +30,9 @@ export const ROUTES = {
   projectMilestone: (id, hitoId) => `/assistant/projects/${id}/hitos/${hitoId}`,
   ticketFull: (id) => `/assistant/tickets/${id}/detalle`,
   ticketAttachments: (id) => `/assistant/tickets/${id}/adjuntos`,
+  ticketImages: (id) => `/assistant/tickets/${id}/imagenes`,
+  ticketImage: (id, n) => `/assistant/tickets/${id}/imagenes/${encodeURIComponent(n)}`,
+  ticketDocuments: (id) => `/assistant/tickets/${id}/adjuntos`,
   ticketAttachment: (id, ref) => `/assistant/tickets/${id}/adjuntos/${encodeURIComponent(ref)}`,
   ticketDates: (id) => `/assistant/tickets/${id}/fechas`,
   ticketHours: (id) => `/assistant/tickets/${id}/horas`,
@@ -47,6 +50,8 @@ export const ROUTES = {
   hoursReport: () => '/assistant/informes/horas',
   deviceRedeem: () => '/assistant/devices/redeem',
   deviceVerify: () => '/assistant/devices/verify',
+  devicesMine: () => '/assistant/devices/mine',
+  deviceRevoke: (id) => `/assistant/devices/${encodeURIComponent(id)}/revoke`,
 };
 
 export class HttpMyraypaClient {
@@ -62,7 +67,7 @@ export class HttpMyraypaClient {
     this.#timeoutMs = timeoutMs;
   }
 
-  async #request(method, path, { query, body } = {}) {
+  async #request(method, path, { query, body, timeoutMs } = {}) {
     const url = new URL(this.#baseUrl + path);
     for (const [k, v] of Object.entries(query ?? {})) if (v !== undefined && v !== '') url.searchParams.set(k, String(v));
     let res;
@@ -77,7 +82,7 @@ export class HttpMyraypaClient {
           ...(body ? { 'Content-Type': 'application/json' } : {}),
         },
         body: body ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(this.#timeoutMs),
+        signal: AbortSignal.timeout(timeoutMs ?? this.#timeoutMs),
       });
     } catch (err) {
       throw new MyraypaError(`No he podido conectar con MyRAYPA (${err.name === 'TimeoutError' ? 'tiempo agotado' : err.message}).`, 503);
@@ -98,6 +103,14 @@ export class HttpMyraypaClient {
   verifyDevice(token) {
     return this.#request('POST', ROUTES.deviceVerify(), { body: { token } });
   }
+  /** Dispositivos activos del usuario que actúa: { devices:[{id,name,createdAt,lastSeenAt}] }. */
+  listMyDevices() {
+    return this.#request('GET', ROUTES.devicesMine());
+  }
+  /** Revoca un dispositivo del propio usuario. */
+  revokeMyDevice(id) {
+    return this.#request('POST', ROUTES.deviceRevoke(id));
+  }
   listProjects() {
     return this.#request('GET', ROUTES.projects());
   }
@@ -109,6 +122,10 @@ export class HttpMyraypaClient {
   }
   projectSummary(proyectoId) {
     return this.#request('GET', ROUTES.summary(proyectoId));
+  }
+  /** Sube un documento (Buffer) al ticket, o a un comentario nuevo del ticket. */
+  attachDocument(id, { nombre, buffer, destino = 'ticket', comentario }, origin) {
+    return this.#request('POST', ROUTES.ticketDocuments(id), { body: { nombre, contenidoBase64: buffer.toString('base64'), destino, ...(comentario && { comentario }), origin }, timeoutMs: 60_000 });
   }
   createTicket(datos, origin) {
     return this.#request('POST', ROUTES.tickets(), { body: { ...datos, origin } });
@@ -135,6 +152,13 @@ export class HttpMyraypaClient {
   }
   listTicketAttachments(id) {
     return this.#request('GET', ROUTES.ticketAttachments(id));
+  }
+  listTicketImages(id) {
+    return this.#request('GET', ROUTES.ticketImages(id));
+  }
+  /** Una imagen del ticket en base64: { imagen, mediaType, base64, bytes, aviso }. Más tiempo: descarga del almacenamiento. */
+  readTicketImage(id, n) {
+    return this.#request('GET', ROUTES.ticketImage(id, n), { timeoutMs: 30_000 });
   }
   readTicketAttachment(id, ref, desde) {
     return this.#request('GET', ROUTES.ticketAttachment(id, ref), { query: { desde } });

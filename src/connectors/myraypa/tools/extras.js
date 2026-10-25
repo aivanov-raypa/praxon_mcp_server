@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { defineTool } from '../../../tools/registry.js';
-import { originOf, proyectoId, recorta, ticketId } from './shared.js';
+import { ordenExplicita, originOf, proyectoId, recorta, ticketId } from './shared.js';
 
 const fecha = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'AAAA-MM-DD').describe('Fecha AAAA-MM-DD (resuelve "el viernes" o "fin de mes" con la fecha de hoy)');
 const nombres = z.array(z.string().min(1).max(60)).max(10);
@@ -59,7 +59,7 @@ export function extrasTools(client) {
       connector, name: 'cambiar_fechas_ticket', risk: 'write',
       description: 'Cambia la fecha de inicio, la de vencimiento y/o las horas estimadas de un ticket. Usa null para quitar un valor.',
       input: z
-        .object({ ticketId, inicio: fecha.nullable().optional(), vencimiento: fecha.nullable().optional(), estimadoHoras: z.number().min(0).max(10000).nullable().optional() })
+        .object({ ticketId, inicio: fecha.nullable().optional(), vencimiento: fecha.nullable().optional(), estimadoHoras: z.number().min(0).max(10000).nullable().optional(), ordenExplicita })
         .refine((a) => a.inicio !== undefined || a.vencimiento !== undefined || a.estimadoHoras !== undefined, { message: 'indica al menos un cambio' }),
       summarize: async (a) => {
         const c = [];
@@ -68,7 +68,7 @@ export function extrasTools(client) {
         if (a.estimadoHoras !== undefined) c.push(a.estimadoHoras ? `estimación de ${a.estimadoHoras} horas` : 'quitar la estimación');
         return `Voy a cambiar el ticket ${await titulo(client, a.ticketId)}: ${c.join(' y ')}`;
       },
-      execute: async ({ ticketId: id, ...cambios }, { session }) => client.setTicketDates(id, cambios, originOf(session)),
+      execute: async ({ ticketId: id, ordenExplicita: _o, ...cambios }, { session }) => client.setTicketDates(id, cambios, originOf(session)),
     }),
     defineTool({
       connector, name: 'registrar_horas', risk: 'write',

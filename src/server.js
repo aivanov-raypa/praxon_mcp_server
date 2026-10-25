@@ -45,12 +45,16 @@ export function createServer({
   triage = null,
   agents = null,
   usage = null,
+  panels = null,
   sessions = new SessionStore(),
   myraypa = null,
   auth = new DeviceAuth({ config, myraypa }),
   redeemLimiter = new RateLimiter(),
+  authLimiter = new RateLimiter({ max: config.AUTH_FAIL_MAX ?? 20, windowMs: (config.AUTH_FAIL_WINDOW_MINUTES ?? 10) * 60_000 }),
   stt = null,
   voice = null,
+  onConnection = null,
+  onSessionEnd = null,
 }) {
   // Las frases fijas de la app se repiten (p. ej. "No te he entendido. Di confirmo o cancela."): se guardan para no pagar la síntesis cada vez.
   const phrases = new Map();
@@ -93,7 +97,7 @@ export function createServer({
       redeem(req, res).catch(() => res.headersSent || sendJson(res, 500, { message: 'Error interno.' }));
     } else if (req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"status":"ok"}');
-    } else if (req.url === '/pair' && isLoopback(req.socket.remoteAddress) && !req.headers['x-forwarded-for']) {
+    } else if (req.url === '/pair' && config.ALLOW_LEGACY_TOKEN && isLoopback(req.socket.remoteAddress) && !req.headers['x-forwarded-for']) {
       // Solo desde el propio equipo del servidor: la página contiene el token.
       pairPage({ config, port: http.address()?.port ?? config.PORT })
         .then((html) => res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }).end(html))
@@ -108,10 +112,16 @@ export function createServer({
     path: '/ws',
     maxPayload: 16 * 1024,
     verifyClient: (info, done) => {
+      const ip = info.req.socket.remoteAddress ?? '?';
+      if (authLimiter.blocked(ip)) return done(false, 429, 'Too Many Requests');
       auth
         .authenticate(info.req.headers.authorization)
         .then((identity) => {
           info.req.praxonIdentity = identity;
+          if (!identity) {
+            authLimiter.take(ip);
+            log({ event: 'auth_failed', remote: ip });
+          }
           done(Boolean(identity), 401, 'Unauthorized');
         })
         .catch((err) => {
@@ -125,7 +135,7 @@ export function createServer({
     for (const client of wss.clients) if (client.readyState === client.OPEN) client.send(JSON.stringify(msg));
   };
 
-  async function handleProposals(msg, emit, broadcast) {
+  async function handleProposals(msg, emit, broadcast, identity) {
     if (!triage) {
       emit({ type: 'error', message: 'La revisión automática no está disponible.' });
     } else if (msg.type === 'proposals_list') {
@@ -133,18 +143,18 @@ export function createServer({
     } else if (msg.type === 'proposals_run') {
       const r0 = triage.running;
       broadcast({ ...triage.view(), running: true });
-      const r = await triage.run({ user: config.PRAXON_USER, trigger: 'manual' }).catch((err) => {
+      const r = await triage.run({ user: identity.user, trigger: 'manual' }).catch((err) => {
         console.error('[revision]', err.message);
         emit({ type: 'error', message: 'No he podido hacer la revisión. Inténtalo de nuevo.' });
         return null;
       });
       if (r || r0) broadcast(triage.view());
     } else if (msg.type === 'proposal_group_decision') {
-      const r = await triage.decideGroup({ briefingId: msg.briefingId, grupo: msg.grupo, aprobar: msg.aprobar, user: config.PRAXON_USER });
+      const r = await triage.decideGroup({ briefingId: msg.briefingId, grupo: msg.grupo, aprobar: msg.aprobar, user: identity.user });
       emit({ type: 'proposal_group_result', briefingId: msg.briefingId, grupo: msg.grupo, ...r });
       broadcast(triage.view());
     } else {
-      const r = await triage.decide({ briefingId: msg.briefingId, actionId: msg.actionId, accepted: msg.accepted, user: config.PRAXON_USER });
+      const r = await triage.decide({ briefingId: msg.briefingId, actionId: msg.actionId, accepted: msg.accepted, user: identity.user });
       emit({ type: 'proposal_result', briefingId: msg.briefingId, actionId: msg.actionId, ...r });
       broadcast(triage.view());
     }
@@ -158,16 +168,42 @@ export function createServer({
     emit({ type: 'usage', ...(await usage.get({ refresh: msg.refresh === true })) });
   }
 
+  /** Quién puede fusionar o pedir cambios: MERGE_ALLOWED_USERS (correos). Vacío = cualquier dispositivo emparejado; el token compartido nunca. */
+  function canApprove(identity) {
+    const list = config.MERGE_ALLOWED_USERS ?? [];
+    if (!list.length) return identity.kind !== 'legacy' || Boolean(config.ALLOW_LEGACY_TOKEN);
+    return Boolean(identity.email) && list.includes(identity.email.toLowerCase());
+  }
+
+  async function handlePanel(msg, emit, identity) {
+    if (!panels) {
+      emit({ type: 'error', message: 'Los paneles no están disponibles.' });
+    } else if (msg.type === 'panel_get') {
+      try {
+        emit(await panels.get(msg, identity));
+      } catch (err) {
+        if (err.name !== 'PanelError') throw err;
+        emit({ type: 'panel_error', panel: msg.panel, message: err.message });
+      }
+    } else {
+      const r = await panels.action(msg, identity);
+      emit({ type: 'panel_action_result', panel: msg.panel, accion: msg.accion, id: msg.id, ...r });
+    }
+  }
+
   async function handleAgents(msg, emit, identity) {
     if (!agents) {
       emit({ type: 'error', message: 'El seguimiento de agentes no está configurado (falta GITHUB_READ_TOKEN).' });
     } else if (msg.type === 'agents_list') {
-      emit({ type: 'agents', canMerge: agents.canMerge, canRequestChanges: agents.canRequestChanges, items: await agents.list() });
+      emit({ type: 'agents', canMerge: agents.canMerge && canApprove(identity), canRequestChanges: agents.canRequestChanges && canApprove(identity), items: await agents.list() });
     } else if (msg.type === 'agents_history') {
       emit({ type: 'agents_history', items: await agents.history({ limit: msg.limit }) });
     } else if (msg.type === 'agent_diff') {
       const d = await agents.diff(msg.runId).catch((err) => ({ error: err.message }));
       emit({ type: 'agent_diff', runId: msg.runId, ...d });
+    } else if ((msg.type === 'agent_request_changes' || msg.type === 'agent_merge') && !canApprove(identity)) {
+      log({ event: 'approval_denied', type: msg.type, user: identity.user, deviceId: identity.deviceId, runId: msg.runId });
+      emit({ type: msg.type === 'agent_merge' ? 'agent_merge_result' : 'agent_changes_result', runId: msg.runId, ok: false, error: 'Tu usuario no tiene permiso para esta acción.' });
     } else if (msg.type === 'agent_request_changes') {
       const r = await agents.requestChanges({ runId: msg.runId, feedback: msg.feedback, user: identity.user });
       emit({ type: 'agent_changes_result', runId: msg.runId, ...r });
@@ -200,6 +236,7 @@ export function createServer({
       d?.close();
     };
     emit({ type: 'capabilities', stt: Boolean(stt), voice: Boolean(voice) });
+    Promise.resolve(onConnection?.(identity, emit)).catch((err) => console.error('[conexion]', err.message));
     log({ event: 'connection_open', user: identity.user, deviceId: identity.deviceId, remote: req.socket.remoteAddress });
 
     ws.on('message', (raw, isBinary) => {
@@ -260,6 +297,14 @@ export function createServer({
         });
         return;
       }
+      if (msg.type === 'panel_get' || msg.type === 'panel_action') {
+        runAsUser(identity.email, () => handlePanel(msg, emit, identity)).catch((err) => {
+          console.error('[panel]', err);
+          if (msg.type === 'panel_get') emit({ type: 'panel_error', panel: msg.panel, message: 'No he podido cargar este panel. Mira la consola del servidor.' });
+          else emit({ type: 'error', message: 'No he podido abrir ese panel.' });
+        });
+        return;
+      }
       if (msg.type.startsWith('agent')) {
         handleAgents(msg, emit, identity).catch((err) => {
           console.error('[agentes]', err);
@@ -268,7 +313,7 @@ export function createServer({
         return;
       }
       if (msg.type.startsWith('proposal')) {
-        handleProposals(msg, emit, broadcast).catch((err) => {
+        handleProposals(msg, emit, broadcast, identity).catch((err) => {
           console.error('[propuestas]', err);
           emit({ type: 'error', message: 'No he podido gestionar las propuestas.' });
         });
@@ -302,6 +347,8 @@ export function createServer({
         session.connection = null;
         orchestrator.abortTurn(session);
         orchestrator.dropPending(session, 'connection_closed');
+        // Al cerrarse la conversación se guarda un resumen para la siguiente (continuidad entre sesiones).
+        Promise.resolve(onSessionEnd?.(session)).catch(() => {});
       }
       log({ event: 'connection_close', user: identity.user, deviceId: identity.deviceId });
     });
@@ -336,6 +383,21 @@ export function createServer({
     wss,
     sessions,
     broadcast,
+    canApprove,
+    /** Conexiones abiertas ahora: [{user, deviceId}]. */
+    connections: () => [...wss.clients].filter((ws) => ws.readyState === ws.OPEN && ws.identity).map((ws) => ({ user: ws.identity.user, deviceId: ws.identity.deviceId })),
+    /** Envía un mensaje a las conexiones de un usuario (correo, o nombre si no tiene). Devuelve a cuántas llegó. */
+    notify: (owner, msg) => {
+      let n = 0;
+      for (const ws of wss.clients) {
+        const id = ws.identity;
+        if (ws.readyState === ws.OPEN && id && (id.email ?? id.user) === owner) {
+          ws.send(JSON.stringify(msg));
+          n++;
+        }
+      }
+      return n;
+    },
     listen: () =>
       new Promise((resolve) => {
         http.listen(config.PORT, config.HOST, () => resolve(http.address().port));

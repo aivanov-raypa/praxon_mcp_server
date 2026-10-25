@@ -26,10 +26,10 @@ export class ReviewedStore {
       }
     }
     if (data && typeof data.desde === 'string' && !Number.isNaN(Date.parse(data.desde))) {
-      this.#data = { desde: data.desde, vistos: data.vistos ?? {}, intentos: data.intentos ?? {} };
+      this.#data = { desde: data.desde, vistos: data.vistos ?? {}, intentos: data.intentos ?? {}, revisiones: data.revisiones ?? {} };
     } else {
       const start = from && !Number.isNaN(Date.parse(from)) ? new Date(from).toISOString() : new Date(now()).toISOString();
-      this.#data = { desde: start, vistos: {}, intentos: {} };
+      this.#data = { desde: start, vistos: {}, intentos: {}, revisiones: {} };
       if (path) {
         // Se fija ya: si el servidor se reinicia antes de la primera revisión, no se pierden los tickets creados entre medias.
         mkdirSync(dirname(path), { recursive: true });
@@ -44,6 +44,29 @@ export class ReviewedStore {
 
   isDone(id) {
     return id in this.#data.vistos || (this.#data.intentos[id] ?? 0) >= MAX_ATTEMPTS;
+  }
+
+  /** Cuándo se revisó por última vez (ISO), o null si no consta (nunca, o ya olvidado). */
+  reviewedAt(id) {
+    return this.#data.vistos[id] ?? null;
+  }
+
+  /**
+   * ¿Hay que volver a revisar un ticket ya revisado porque alguien ha comentado después? Solo si ya se revisó, el último
+   * comentario no es del propio asistente y es posterior a la revisión, ha pasado el enfriamiento y no se ha agotado el
+   * máximo de re-revisiones de ese ticket (evita bucles y gasto).
+   */
+  canRereview(id, ultimoComentario, now, { cooldownMs = 0, max = 3 } = {}) {
+    const hecho = this.reviewedAt(id);
+    if (!hecho || !ultimoComentario?.fecha || ultimoComentario.delAsistente) return false;
+    if (Date.parse(ultimoComentario.fecha) <= Date.parse(hecho)) return false;
+    if (now - Date.parse(hecho) < cooldownMs) return false;
+    return (this.#data.revisiones[id] ?? 0) < max;
+  }
+
+  /** Anota una re-revisión de este ticket. */
+  noteRereview(id) {
+    this.#data.revisiones[id] = (this.#data.revisiones[id] ?? 0) + 1;
   }
 
   markSeen(id, now = Date.now()) {

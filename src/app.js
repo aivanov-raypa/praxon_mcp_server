@@ -6,6 +6,8 @@ import { createMyraypaConnector } from './connectors/myraypa/index.js';
 import { FakeGithub, HttpGithub } from './integrations/github.js';
 import { HttpGithubReader } from './integrations/github-read.js';
 import { createGithubConnector } from './connectors/github/index.js';
+import { createGoogleConnector } from './connectors/google/index.js';
+import { FakeGoogle, HttpGoogle } from './integrations/google.js';
 import { ElevenLabsVoice } from './voice/elevenlabs.js';
 import { ElevenLabsScribe } from './voice/stt.js';
 import { AnthropicModel } from './model/anthropic.js';
@@ -13,7 +15,14 @@ import { ScriptedModel } from './model/scripted.js';
 import { Orchestrator } from './orchestrator.js';
 import { createServer } from './server.js';
 import { ToolRegistry } from './tools/registry.js';
+import { ToolControl } from './tools/control.js';
+import { createPanels } from './panels.js';
 import { ProposalStore } from './proposals/store.js';
+import { ContinuityStore, summarizeSession } from './companion/continuity.js';
+import { UndoStore, installUndo, undoTools } from './companion/undo.js';
+import { ReminderService, ReminderStore, reminderTools } from './companion/reminders.js';
+import { screenTools } from './tools/screen.js';
+import { TicketLog } from './proposals/ticketlog.js';
 import { Triage } from './proposals/triage.js';
 import { TriageScheduler } from './proposals/scheduler.js';
 import { ReviewedStore } from './proposals/reviewed.js';
@@ -24,13 +33,14 @@ import { UsageService } from './usage/service.js';
 import { anthropicUsage, elevenLabsUsage, githubUsage } from './usage/providers.js';
 import { HttpGithubMerger } from './integrations/github-merge.js';
 import { proposalTools } from './proposals/tools.js';
+import { ReviewScope } from './proposals/scope.js';
 import { contextoTools } from './agents/contexto.js';
 import { MemoryStore } from './memory/store.js';
 import { memoryTools } from './memory/tools.js';
 
 /** Monta todas las piezas segun la configuracion. Los `overrides` permiten sustituirlas en los tests. */
 export function createApp(config, overrides = {}) {
-  const audit = overrides.audit ?? new JsonlAudit(config.AUDIT_LOG_PATH);
+  const audit = overrides.audit ?? new JsonlAudit(config.AUDIT_LOG_PATH, { textMax: config.AUDIT_TEXT_MAX_CHARS ?? 200 });
 
   const myraypa =
     overrides.myraypa ??
@@ -78,14 +88,32 @@ export function createApp(config, overrides = {}) {
 
   // Cada sistema nuevo (Salesforce, SAP B1, Google Workspace...) sera otro conector registrado aqui,
   // con las mismas reglas de riesgo, confirmacion y auditoria.
-  const registry = new ToolRegistry().registerConnector(createMyraypaConnector({ client: myraypa, github }));
+  const toolControl = overrides.toolControl ?? new ToolControl(config.TOOLS_DISABLED_PATH);
+  const registry = new ToolRegistry().setControl(toolControl).registerConnector(createMyraypaConnector({ client: myraypa, github }));
   if (githubReader) registry.registerConnector(createGithubConnector({ client: myraypa, reader: githubReader }));
+  // Google (calendario y correo): solo lectura y solo para GOOGLE_OWNER_EMAIL. Nunca se ofrece a la revisión automática.
+  const google =
+    overrides.google ??
+    (config.GOOGLE_MODE === 'http'
+      ? new HttpGoogle({ clientId: config.GOOGLE_CLIENT_ID, clientSecret: config.GOOGLE_CLIENT_SECRET, refreshToken: config.GOOGLE_REFRESH_TOKEN, timeZone: config.GOOGLE_TIMEZONE, bodyMax: config.GOOGLE_MAIL_BODY_MAX })
+      : config.GOOGLE_MODE === 'fake'
+        ? new FakeGoogle({ now: overrides.now })
+        : null);
+  if (google) registry.registerConnector(createGoogleConnector({ client: google, config, now: overrides.now }));
 
   // Revision automatica: el asistente analiza por su cuenta y deja propuestas; solo se ejecutan si el usuario las aprueba.
   const store = overrides.proposalStore ?? new ProposalStore(config.PROPOSALS_PATH);
   const memory = overrides.memory ?? new MemoryStore(config.MEMORY_PATH);
-  const triage = new Triage({ model, registry, audit, store, config, now: overrides.now, memory });
-  registry.registerConnector({ name: 'praxon', tools: [...proposalTools({ store, triage }), ...contextoTools(), ...memoryTools({ memory })] });
+  const ticketLog = overrides.ticketLog ?? new TicketLog(config.TICKETLOG_PATH, { now: overrides.now });
+  const continuity = overrides.continuity ?? new ContinuityStore(config.CONTINUITY_PATH, { now: overrides.now });
+  const undo = overrides.undo ?? new UndoStore({ now: overrides.now });
+  const reminderStore = overrides.reminderStore ?? new ReminderStore(config.REMINDERS_PATH, { now: overrides.now });
+  const reviewed = overrides.reviewed ?? new ReviewedStore(config.REVIEWED_PATH, { from: config.TRIAGE_WATCH_FROM, now: overrides.now });
+  const scope = new ReviewScope({ myraypa, reviewed, config, now: overrides.now });
+  const triage = new Triage({ model, registry, audit, store, config, now: overrides.now, memory, ticketLog, scope });
+  registry.registerConnector({ name: 'praxon', tools: [...proposalTools({ store, triage, client: myraypa, scope, config, onReviewed: (b, owner) => { server?.broadcast(triage.view()); if (owner) server?.notify(owner, { type: 'reminder', id: `revision-${b.id}`, texto: b.acciones?.length ? `Revisión terminada. Tienes ${b.acciones.length} ${b.acciones.length === 1 ? 'propuesta' : 'propuestas'} pendientes en Trabajo.` : 'Revisión terminada. No propongo ningún cambio.' }); } }), ...contextoTools(), ...screenTools(), ...reminderTools({ store: reminderStore }), ...memoryTools({ memory })] });
+  installUndo({ registry, client: myraypa, undo });
+  registry.registerConnector({ name: 'praxon', tools: undoTools({ undo, client: myraypa }) });
 
   const orchestrator = new Orchestrator({
     model,
@@ -93,7 +121,11 @@ export function createApp(config, overrides = {}) {
     audit,
     config,
     // Se reconstruye en cada llamada al modelo: lleva la fecha y el usuario actuales.
-    systemPrompt: (session) => buildSystemPrompt({ name: config.ASSISTANT_NAME, user: session.user, contexto: session.contextoPR?.texto, memoria: memory.render() }),
+    // La continuidad se fija al empezar la sesión: cambiar el prompt a mitad de conversación invalidaría la caché y el razonamiento previo.
+    systemPrompt: (session) => {
+      if (session.continuidad === undefined) session.continuidad = config.CONTINUITY_ENABLED ? continuity.render(session.email ?? session.user, { excludeSessionId: session.id }) : null;
+      return buildSystemPrompt({ name: config.ASSISTANT_NAME, user: session.user, contexto: session.contextoPR?.texto, memoria: memory.render(), continuidad: session.continuidad });
+    },
     voice,
     now: overrides.now,
   });
@@ -110,10 +142,13 @@ export function createApp(config, overrides = {}) {
       },
     });
   let server;
+  let reminders = null;
   const agents = githubReader
     ? new AgentService({ myraypa, reader: githubReader, merger, dispatcher: github, audit, config, now: overrides.now, onChange: () => server?.broadcast({ type: 'agents_changed' }) })
     : null;
-  server = createServer({ config, orchestrator, audit, triage, myraypa, auth: overrides.auth, stt, voice, agents, usage });
+  const panels = createPanels({ config, google, myraypa, audit, registry, toolControl, triage, agents, reminderStore, memory, context: { count: (owner) => continuity.count(owner), list: (owner) => continuity.list(owner), forget: async (owner) => { const n = await continuity.clear(owner); server.sessions.forget(owner); return n; } }, connections: () => server?.connections() ?? [], isOwner: (identity) => server.canApprove(identity), now: overrides.now });
+  server = createServer({ config, orchestrator, audit, triage, myraypa, auth: overrides.auth, stt, voice, agents, usage, panels, onSessionEnd: (session) => config.CONTINUITY_ENABLED && summarizeSession({ model, config, store: continuity, session, owner: session.email ?? session.user }), onConnection: (identity, emit) => reminders?.flush(identity.email ?? identity.user, emit) });
+  reminders = new ReminderService({ store: reminderStore, deliver: (owner, msg) => server.notify(owner, msg) });
   // Se arranca desde index.js (start); en los tests no se programa nada.
   const scheduler = new TriageScheduler({
     times: config.TRIAGE_TIMES,
@@ -124,7 +159,6 @@ export function createApp(config, overrides = {}) {
     },
   });
   // Tickets nuevos: sondeo periódico a MyRAYPA (se arranca desde index.js). La marca de corte se crea al construirlo.
-  const reviewed = overrides.reviewed ?? new ReviewedStore(config.REVIEWED_PATH, { from: config.TRIAGE_WATCH_FROM, now: overrides.now });
-  const watcher = new TicketWatcher({ myraypa, triage, reviewed, config, now: overrides.now, onBriefing: () => server.broadcast(triage.view()) });
-  return { server, memory, orchestrator, registry, audit, myraypa, github, githubReader, model, voice, stt, store, triage, scheduler, watcher, reviewed, agents, merger, usage, tracker };
+  const watcher = new TicketWatcher({ myraypa, triage, reviewed, scope, config, now: overrides.now, onBriefing: () => server.broadcast(triage.view()) });
+  return { server, google, panels, toolControl, memory, continuity, reminders, reminderStore, orchestrator, registry, audit, myraypa, github, githubReader, model, voice, stt, store, triage, scheduler, watcher, reviewed, agents, merger, usage, tracker };
 }

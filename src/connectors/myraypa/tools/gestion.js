@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { defineTool } from '../../../tools/registry.js';
-import { PRIORIDADES, estado, originOf, proyectoId, recorta, ticketId } from './shared.js';
+import { PRIORIDADES, estado, ordenExplicita, originOf, proyectoId, recorta, ticketId } from './shared.js';
 
 // Los tickets de MyRAYPA no tienen número: se nombran por su título.
 const etiqueta = (tk) => `ticket ${tk.titulo}`;
@@ -43,6 +43,7 @@ export function gestionTools(client) {
           prioridad: z.enum(PRIORIDADES).optional(),
           asignado: z.string().max(80).optional(),
           completado: z.boolean().optional().describe('true = marcar como completado; false = reabrir'),
+          ordenExplicita,
         })
         .refine((a) => a.estado || a.prioridad || a.asignado || a.completado !== undefined, { message: 'indica al menos un cambio' }),
       summarize: async (a) => {
@@ -54,14 +55,14 @@ export function gestionTools(client) {
         if (!cambios.length) throw new Error(`El ticket ${tk.titulo} ya tiene esos valores; no hay nada que cambiar.`);
         return `Voy a cambiar el ${etiqueta(tk)}: ${cambios.join(' y ')}`;
       },
-      execute: async ({ ticketId: id, ...cambios }, { session }) => client.updateTicket(id, cambios, originOf(session)),
+      execute: async ({ ticketId: id, ordenExplicita: _o, ...cambios }, { session }) => client.updateTicket(id, cambios, originOf(session)),
     }),
     defineTool({
       connector,
       name: 'comentar_ticket',
       risk: 'write',
       description: 'Añade un comentario a un ticket.',
-      input: z.object({ ticketId, texto: z.string().min(1).max(500) }),
+      input: z.object({ ticketId, texto: z.string().min(1).max(500), ordenExplicita }),
       summarize: async (a) => {
         const tk = await client.getTicket(a.ticketId);
         return `Voy a añadir un comentario al ${etiqueta(tk)}: ${recorta(a.texto)}`;

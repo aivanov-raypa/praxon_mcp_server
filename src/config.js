@@ -5,8 +5,8 @@ const schema = z
     PORT: z.coerce.number().int().min(0).max(65535).default(8080),
     HOST: z.string().default('0.0.0.0'),
     PRAXON_TOKEN: z.string().min(12, 'PRAXON_TOKEN debe tener al menos 12 caracteres'),
-    // Token compartido de desarrollo. En producción, empareja los móviles desde MyRAYPA y pon ALLOW_LEGACY_TOKEN=false.
-    ALLOW_LEGACY_TOKEN: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+    // Token compartido de desarrollo: DESACTIVADO por defecto. Los móviles se emparejan desde MyRAYPA (token por dispositivo, revocable).
+    ALLOW_LEGACY_TOKEN: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
     PRAXON_USER: z.string().min(1).default('desconocido'),
     PRAXON_PUBLIC_URL: z.string().regex(/^wss?:\/\/.+/, 'debe empezar por ws:// o wss://').optional(),
     ASSISTANT_NAME: z.string().min(1).default('Praxon'),
@@ -21,6 +21,16 @@ const schema = z
     MYRAYPA_API_TOKEN: z.string().optional(),
 
     GITHUB_MODE: z.enum(['fake', 'http']).default('fake'),
+    // Calendario y correo de Google (solo lectura, un único usuario). off = desactivado. Ver docs/google.md.
+    GOOGLE_MODE: z.enum(['off', 'fake', 'http']).default('off'),
+    GOOGLE_CLIENT_ID: z.string().optional(),
+    GOOGLE_CLIENT_SECRET: z.string().optional(),
+    GOOGLE_REFRESH_TOKEN: z.string().optional(),
+    GOOGLE_OWNER_EMAIL: z.string().email().optional(),
+    GOOGLE_TIMEZONE: z.string().default('Europe/Madrid'),
+    GOOGLE_WORK_START: z.coerce.number().int().min(0).max(23).default(9),
+    GOOGLE_WORK_END: z.coerce.number().int().min(1).max(24).default(18),
+    GOOGLE_MAIL_BODY_MAX: z.coerce.number().int().min(200).max(20000).default(3000),
     GITHUB_TOKEN: z.string().optional(),
     GITHUB_WORKFLOW_FILE: z.string().default('praxon-agent.yml'),
     // Lectura del código de los proyectos (revisión y conversación). Token de grano fino SOLO de lectura
@@ -36,6 +46,14 @@ const schema = z
     ANTHROPIC_ADMIN_KEY: z.string().optional(),
     // Fusión de pull requests desde la app. Token de grano fino PROPIO (Pull requests y Contents en escritura). Sin él no se puede fusionar.
     GITHUB_MERGE_TOKEN: z.string().optional(),
+    // Correos (separados por comas) de quienes pueden fusionar PRs o pedir cambios al agente. Vacío = cualquier dispositivo emparejado.
+    MERGE_ALLOWED_USERS: z
+      .string()
+      .default('')
+      .transform((v) => v.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)),
+    // Intentos de conexión fallidos por IP antes de bloquearla temporalmente.
+    AUTH_FAIL_MAX: z.coerce.number().int().positive().default(20),
+    AUTH_FAIL_WINDOW_MINUTES: z.coerce.number().positive().default(10),
     GITHUB_MERGE_METHOD: z.enum(['squash', 'merge', 'rebase']).default('squash'),
     // Seguimiento de agentes: sondeo a GitHub (necesita GITHUB_READ_TOKEN con Actions y Checks en lectura).
     AGENTS_WATCH: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
@@ -79,19 +97,44 @@ const schema = z
     // Fecha ISO desde la que revisar la primera vez (si no, desde que arranca por primera vez).
     TRIAGE_WATCH_FROM: z.string().optional(),
     REVIEWED_PATH: z.string().default('./data/reviewed.json'),
+    // Imágenes que puede abrir una revisión automática (cada una cuesta tokens de visión).
+    TRIAGE_MAX_IMAGES: z.coerce.number().int().min(0).default(3),
+    // Nuevo comentario en un ticket ya revisado: se vuelve a revisar, como mucho cada X minutos y N veces por ticket.
+    TRIAGE_REREVIEW: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+    TRIAGE_REREVIEW_COOLDOWN_MINUTES: z.coerce.number().min(0).default(30),
+    TRIAGE_MAX_REREVIEWS: z.coerce.number().int().min(0).default(3),
+    // Tickets como máximo en una revisión manual/programada o pedida por voz (nunca se recorre el backlog entero).
+    TRIAGE_MAX_TICKETS: z.coerce.number().int().positive().default(6),
+    // Cambios que Praxon ejecuta sin pedir confirmación cuando le das una orden explícita sobre UN ticket (se pueden deshacer).
+    DIRECT_WRITE: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+    DIRECT_WRITE_TOOLS: z
+      .string()
+      .default('myraypa_actualizar_ticket,myraypa_comentar_ticket,myraypa_cambiar_fechas_ticket')
+      .transform((v) => v.split(',').map((s) => s.trim()).filter(Boolean)),
     TRIAGE_MAX_STEPS: z.coerce.number().int().positive().default(24),
     // Consultas de código (buscar, leer, commits, PRs) que puede hacer la revisión en cada pasada.
     TRIAGE_CODE_MAX_CALLS: z.coerce.number().int().min(0).default(12),
     TRIAGE_MAX_ACTIONS: z.coerce.number().int().positive().default(10),
     TRIAGE_TIMEOUT_MS: z.coerce.number().int().positive().default(180_000),
+    // Memoria por ticket para no insistir: días sin proponer tras descartar la propuesta de un ticket, y tras cualquier propuesta (0 = desactivado).
+    TICKETLOG_PATH: z.string().default('./data/tickets-propuestos.json'),
+    TRIAGE_DISMISS_DAYS: z.coerce.number().int().min(0).default(90),
+    TRIAGE_COOLDOWN_DAYS: z.coerce.number().int().min(0).default(14),
     PROPOSAL_TTL_HOURS: z.coerce.number().positive().default(48),
     PROPOSALS_PATH: z.string().default('./data/proposals.json'),
+    CONTINUITY_PATH: z.string().default('./data/continuidad.json'),
+    CONTINUITY_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+    REMINDERS_PATH: z.string().default('./data/recordatorios.json'),
     MEMORY_PATH: z.string().default('./data/memoria.json'),
+    TOOLS_DISABLED_PATH: z.string().default('./data/herramientas-desactivadas.json'),
 
-    CONFIRM_TTL_MS: z.coerce.number().int().positive().default(60_000),
+    CONFIRM_TTL_MS: z.coerce.number().int().positive().default(180_000),
     MAX_TOOL_ITERATIONS: z.coerce.number().int().positive().default(6),
     MAX_HISTORY_MESSAGES: z.coerce.number().int().min(4).default(40),
     AUDIT_LOG_PATH: z.string().default('./logs/audit.jsonl'),
+    // Privacidad del log: caracteres que se guardan de lo que dices (0 = no guardar el texto) y días que se conserva.
+    AUDIT_TEXT_MAX_CHARS: z.coerce.number().int().min(0).default(200),
+    AUDIT_RETENTION_DAYS: z.coerce.number().int().min(0).default(90),
   })
   .superRefine((c, ctx) => {
     const need = (cond, path, message) => cond || ctx.addIssue({ code: 'custom', path: [path], message });
@@ -105,6 +148,12 @@ const schema = z
       need(c.ELEVENLABS_VOICE_ID, 'ELEVENLABS_VOICE_ID', 'obligatoria con VOICE_PROVIDER=elevenlabs');
     }
     if (c.STT_PROVIDER === 'elevenlabs') need(c.ELEVENLABS_API_KEY, 'ELEVENLABS_API_KEY', 'obligatoria con STT_PROVIDER=elevenlabs');
+    if (c.GOOGLE_MODE !== 'off') need(c.GOOGLE_OWNER_EMAIL, 'GOOGLE_OWNER_EMAIL', 'obligatoria con GOOGLE_MODE: los datos de Google pertenecen a un solo usuario');
+    if (c.GOOGLE_MODE === 'http') {
+      need(c.GOOGLE_CLIENT_ID, 'GOOGLE_CLIENT_ID', 'obligatoria con GOOGLE_MODE=http');
+      need(c.GOOGLE_CLIENT_SECRET, 'GOOGLE_CLIENT_SECRET', 'obligatoria con GOOGLE_MODE=http');
+      need(c.GOOGLE_REFRESH_TOKEN, 'GOOGLE_REFRESH_TOKEN', 'obligatoria con GOOGLE_MODE=http (npm run google:auth)');
+    }
     if (c.GITHUB_MODE === 'http') need(c.GITHUB_TOKEN, 'GITHUB_TOKEN', 'obligatoria con GITHUB_MODE=http');
   });
 
