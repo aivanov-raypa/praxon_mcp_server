@@ -24,3 +24,17 @@ describe('buildSystemPrompt', () => {
     expect(p).toMatch(/no puedes mergear, desplegar, borrar/i);
   });
 });
+
+describe('qué tengo hoy: MyRAYPA primero', () => {
+  it('sin Google activo el prompt no menciona agenda ni correo de Google', () => {
+    const p = buildSystemPrompt({ user: 'alex' });
+    expect(p).not.toMatch(/google_agenda|google_correo/);
+    expect(p).toMatch(/Empieza SIEMPRE por MyRAYPA/);
+  });
+  it('con Google activo sigue explicando agenda y correo, pero MyRAYPA va primero', () => {
+    const p = buildSystemPrompt({ user: 'alex', google: true });
+    expect(p).toMatch(/google_agenda_eventos/);
+    expect(p).toMatch(/solo ofrece mirar la agenda/);
+    expect(p.indexOf('Empieza SIEMPRE por MyRAYPA')).toBeLessThan(p.indexOf('google_agenda_eventos'));
+  });
+});

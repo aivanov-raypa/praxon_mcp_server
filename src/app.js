@@ -124,7 +124,7 @@ export function createApp(config, overrides = {}) {
     // La continuidad se fija al empezar la sesión: cambiar el prompt a mitad de conversación invalidaría la caché y el razonamiento previo.
     systemPrompt: (session) => {
       if (session.continuidad === undefined) session.continuidad = config.CONTINUITY_ENABLED ? continuity.render(session.email ?? session.user, { excludeSessionId: session.id }) : null;
-      return buildSystemPrompt({ name: config.ASSISTANT_NAME, user: session.user, contexto: session.contextoPR?.texto, memoria: memory.render(), continuidad: session.continuidad });
+      return buildSystemPrompt({ name: config.ASSISTANT_NAME, user: session.user, contexto: session.contextoPR?.texto, memoria: memory.render(), continuidad: session.continuidad, google: config.GOOGLE_MODE !== 'off' });
     },
     voice,
     now: overrides.now,
