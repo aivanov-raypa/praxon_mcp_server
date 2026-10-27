@@ -282,3 +282,50 @@ describe('pedir cambios sobre un pull request', () => {
     expect(b.state().bloqueo).toMatch(/no ha iniciado/);
   });
 });
+
+describe('ticket completado al fusionar', () => {
+  const ready = async (prExtra = {}) => {
+    const r = { ticketId: '215', runId: 'run-1' };
+    const b = await build({ workflowRuns: [wf(r, { estado: 'completed', resultado: 'success' })], pullRequests: [pr(r, prExtra)] });
+    await b.svc.tick();
+    return b;
+  };
+  const ticket = (b) => b.myraypa.tickets.find((t) => t.id === '215');
+
+  it('fusionar desde la app mueve el ticket a Completado y lo marca finalizado', async () => {
+    const b = await ready();
+    expect(ticket(b).completado).toBe(false);
+    const r = await b.svc.merge({ runId: 'run-1', sha: SHA, numero: 12, user: 'alex' });
+    expect(r.ticketCompletado).toBe(true);
+    expect(ticket(b).estadoId).toBe('done');
+    expect(ticket(b).completado).toBe(true);
+    expect(b.audit.events.some((e) => e.event === 'agent_ticket_completado' && e.ok)).toBe(true);
+  });
+
+  it('PR fusionado fuera de la app (detectado en tick) también completa el ticket', async () => {
+    const b = await ready({ estado: 'fusionado' });
+    expect(b.state().estado).toBe('completado');
+    expect(ticket(b).estadoId).toBe('done');
+    expect(ticket(b).completado).toBe(true);
+  });
+
+  it('un ticket ya completado no se vuelve a tocar', async () => {
+    const b = await ready();
+    await b.svc.merge({ runId: 'run-1', sha: SHA, numero: 12, user: 'alex' });
+    const llamadas = [];
+    const orig = b.myraypa.updateTicket.bind(b.myraypa);
+    b.myraypa.updateTicket = async (...a) => { llamadas.push(a); return orig(...a); };
+    await b.svc.tick();
+    expect(llamadas).toHaveLength(0);
+  });
+
+  it('si MyRAYPA falla al completar, la fusión sigue siendo correcta', async () => {
+    const b = await ready();
+    b.myraypa.updateTicket = async () => { throw new Error('caído'); };
+    const r = await b.svc.merge({ runId: 'run-1', sha: SHA, numero: 12, user: 'alex' });
+    expect(r.ok).toBe(true);
+    expect(r.ticketCompletado).toBe(false);
+    expect(b.state().estado).toBe('completado');
+    expect(b.audit.events.some((e) => e.event === 'agent_ticket_completado' && e.ok === false)).toBe(true);
+  });
+});

@@ -144,7 +144,7 @@ export function createApp(config, overrides = {}) {
   let server;
   let reminders = null;
   const agents = githubReader
-    ? new AgentService({ myraypa, reader: githubReader, merger, dispatcher: github, audit, config, now: overrides.now, onChange: () => server?.broadcast({ type: 'agents_changed' }) })
+    ? new AgentService({ myraypa, reader: githubReader, merger, dispatcher: github, audit, config, now: overrides.now, onChange: () => { server?.broadcast({ type: 'agents_changed' }); server?.broadcast(triage.view()); } })
     : null;
   const panels = createPanels({ config, google, myraypa, audit, registry, toolControl, triage, agents, reminderStore, memory, context: { count: (owner) => continuity.count(owner), list: (owner) => continuity.list(owner), forget: async (owner) => { const n = await continuity.clear(owner); server.sessions.forget(owner); return n; } }, connections: () => server?.connections() ?? [], isOwner: (identity) => server.canApprove(identity), now: overrides.now });
   server = createServer({ config, orchestrator, audit, triage, myraypa, auth: overrides.auth, stt, voice, agents, usage, panels, onSessionEnd: (session) => config.CONTINUITY_ENABLED && summarizeSession({ model, config, store: continuity, session, owner: session.email ?? session.user }), onConnection: (identity, emit) => reminders?.flush(identity.email ?? identity.user, emit) });

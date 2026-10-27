@@ -6,6 +6,9 @@
  * - merge(): fusion del PR atada al SHA revisado y a que el usuario teclee el numero del PR. Solo se llama desde la app
  *   (mensaje agent_merge): no es una herramienta del modelo, asi que no puede hacerse por voz ni por conversacion.
  */
+/** Columna de "completado" de un proyecto: la de id done o la que se llame completado/finalizado/hecho/terminado. */
+const COLUMNA_FINAL = /complet|finaliz|hecho|terminad|done/i;
+
 export const branchOf = (run) => `praxon/ticket-${run.ticketId}-${run.runId}`;
 
 const ABIERTOS = ['en_cola', 'en_curso', 'bloqueado', 'pendiente_revision'];
@@ -79,6 +82,34 @@ export class AgentService {
     }
   }
 
+
+  /**
+   * El pull request se ha fusionado (desde la app o directamente en GitHub): el ticket pasa a la columna de completados y se
+   * marca como finalizado. Si el proyecto no tiene una columna reconocible, solo se marca como finalizado. Un fallo aquí no
+   * deshace la fusión: queda en el registro de auditoría.
+   */
+  async #completarTicket(run, user) {
+    const evento = { event: 'agent_ticket_completado', user, runId: run.runId, ticketId: run.ticketId };
+    try {
+      const tk = await this.#myraypa.getTicket(run.ticketId);
+      const proyectos = await this.#myraypa.listProjects();
+      const estados = proyectos.find((p) => String(p.id) === String(tk.proyectoId))?.estados ?? [];
+      const final = estados.find((e) => e.id === 'done') ?? estados.find((e) => COLUMNA_FINAL.test(e.titulo ?? '') || COLUMNA_FINAL.test(e.id ?? ''));
+      const cambios = {};
+      if (final && tk.estadoId !== final.id) cambios.estado = final.id;
+      if (tk.completado !== true) cambios.completado = true;
+      if (Object.keys(cambios).length) {
+        await this.#myraypa.updateTicket(run.ticketId, cambios, { type: 'voice-assistant', user, sessionId: `fusion-${run.runId}` });
+      }
+      await this.#audit.record({ ...evento, ok: true, estado: final?.titulo ?? null, cambios: Object.keys(cambios) });
+      return true;
+    } catch (err) {
+      console.error('[agentes]', `no se ha podido completar el ticket ${run.ticketId}:`, err.message);
+      await this.#audit.record({ ...evento, ok: false, error: err.message }).catch(() => {});
+      return false;
+    }
+  }
+
   /** Una pasada de seguimiento. Devuelve cuantos agentes han cambiado de estado. */
   async tick() {
     if (this.#busy) return { omitido: true };
@@ -114,7 +145,11 @@ export class AgentService {
     if (it) return this.#syncIteracion(run, pr, wf, it, base);
 
     if (pr) {
-      if (pr.estado === 'fusionado') return this.#patch(run, { ...base, estado: 'completado', rama: branch, prUrl: pr.url });
+      if (pr.estado === 'fusionado') {
+        const ok = await this.#patch(run, { ...base, estado: 'completado', rama: branch, prUrl: pr.url });
+        if (ok) await this.#completarTicket(run, this.#config.PRAXON_USER ?? 'praxon');
+        return ok;
+      }
       if (pr.estado === 'cerrado') return this.#patch(run, { ...base, estado: 'fallido', rama: branch, prUrl: pr.url, pregunta: 'El pull request se cerró sin fusionar.' });
       if (run.estado !== 'pendiente_revision' || base.githubRunId) {
         return this.#patch(run, { ...base, estado: 'pendiente_revision', rama: branch, prUrl: pr.url, pregunta: null });
@@ -298,11 +333,12 @@ export class AgentService {
       if (!f.fusionable) throw new AgentError(f.motivo);
       await this.#merger.mergePull({ repo: run.repo, number: pr.numero, sha: pr.sha, titulo: pr.titulo });
       await this.#patch(run, { estado: 'completado' });
+      const ticketCompletado = await this.#completarTicket(run, user);
       // Dejar constancia en el ticket. La confirmación de la fusión ya cubre este comentario; si falla, la fusión sigue siendo válida.
       const comentado = await this.#comentar(run, pr, user);
-      await this.#audit.record({ ...evento, ok: true, comentado });
+      await this.#audit.record({ ...evento, ok: true, comentado, ticketCompletado });
       this.#onChange();
-      return { ok: true, pr: pr.numero, comentado };
+      return { ok: true, pr: pr.numero, comentado, ticketCompletado };
     } catch (err) {
       await this.#audit.record({ ...evento, ok: false, error: err.message });
       return { ok: false, error: err.message };
