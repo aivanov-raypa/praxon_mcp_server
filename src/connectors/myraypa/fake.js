@@ -509,7 +509,7 @@ export class FakeMyraypa {
   }
 
   #adjuntos(tk) {
-    return tk.adjuntos.map((a, i) => ({ n: i + 1, nombre: a.nombre, tipo: a.tipo ?? null, tamanoKB: 1, origen: a.origen ?? 'ticket', fecha: null, legible: a.texto !== undefined }));
+    return tk.adjuntos.map((a, i) => ({ n: i + 1, nombre: a.nombre, tipo: a.tipo ?? null, tamanoKB: a.tamanoKB ?? 1, origen: a.origen ?? 'ticket', fecha: null, legible: a.texto !== undefined }));
   }
 
   async listTicketAttachments(id) {

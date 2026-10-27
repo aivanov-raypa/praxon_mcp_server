@@ -17,6 +17,7 @@ import { createServer } from './server.js';
 import { ToolRegistry } from './tools/registry.js';
 import { ToolControl } from './tools/control.js';
 import { createPanels } from './panels.js';
+import { PauseSwitch } from './safety/pause.js';
 import { ProposalStore } from './proposals/store.js';
 import { ContinuityStore, summarizeSession } from './companion/continuity.js';
 import { UndoStore, installUndo, undoTools } from './companion/undo.js';
@@ -41,6 +42,8 @@ import { memoryTools } from './memory/tools.js';
 /** Monta todas las piezas segun la configuracion. Los `overrides` permiten sustituirlas en los tests. */
 export function createApp(config, overrides = {}) {
   const audit = overrides.audit ?? new JsonlAudit(config.AUDIT_LOG_PATH, { textMax: config.AUDIT_TEXT_MAX_CHARS ?? 200 });
+  // Interruptor de emergencia: en pausa no se hace ningún cambio (ver safety/pause.js).
+  const pause = overrides.pause ?? new PauseSwitch(config.PAUSE_PATH, { audit, now: overrides.now });
 
   const myraypa =
     overrides.myraypa ??
@@ -89,7 +92,7 @@ export function createApp(config, overrides = {}) {
   // Cada sistema nuevo (Salesforce, SAP B1, Google Workspace...) sera otro conector registrado aqui,
   // con las mismas reglas de riesgo, confirmacion y auditoria.
   const toolControl = overrides.toolControl ?? new ToolControl(config.TOOLS_DISABLED_PATH);
-  const registry = new ToolRegistry().setControl(toolControl).registerConnector(createMyraypaConnector({ client: myraypa, github }));
+  const registry = new ToolRegistry().setControl(toolControl).registerConnector(createMyraypaConnector({ client: myraypa, github, config }));
   if (githubReader) registry.registerConnector(createGithubConnector({ client: myraypa, reader: githubReader }));
   // Google (calendario y correo): solo lectura y solo para GOOGLE_OWNER_EMAIL. Nunca se ofrece a la revisión automática.
   const google =
@@ -110,13 +113,14 @@ export function createApp(config, overrides = {}) {
   const reminderStore = overrides.reminderStore ?? new ReminderStore(config.REMINDERS_PATH, { now: overrides.now });
   const reviewed = overrides.reviewed ?? new ReviewedStore(config.REVIEWED_PATH, { from: config.TRIAGE_WATCH_FROM, now: overrides.now });
   const scope = new ReviewScope({ myraypa, reviewed, config, now: overrides.now });
-  const triage = new Triage({ model, registry, audit, store, config, now: overrides.now, memory, ticketLog, scope });
+  const triage = new Triage({ model, registry, audit, store, config, pause, now: overrides.now, memory, ticketLog, scope });
   registry.registerConnector({ name: 'praxon', tools: [...proposalTools({ store, triage, client: myraypa, scope, config, onReviewed: (b, owner) => { server?.broadcast(triage.view()); if (owner) server?.notify(owner, { type: 'reminder', id: `revision-${b.id}`, texto: b.acciones?.length ? `Revisión terminada. Tienes ${b.acciones.length} ${b.acciones.length === 1 ? 'propuesta' : 'propuestas'} pendientes en Trabajo.` : 'Revisión terminada. No propongo ningún cambio.' }); } }), ...contextoTools(), ...screenTools(), ...reminderTools({ store: reminderStore }), ...memoryTools({ memory })] });
   installUndo({ registry, client: myraypa, undo });
   registry.registerConnector({ name: 'praxon', tools: undoTools({ undo, client: myraypa }) });
 
   const orchestrator = new Orchestrator({
     model,
+    pause,
     registry,
     audit,
     config,
@@ -144,9 +148,9 @@ export function createApp(config, overrides = {}) {
   let server;
   let reminders = null;
   const agents = githubReader
-    ? new AgentService({ myraypa, reader: githubReader, merger, dispatcher: github, audit, config, now: overrides.now, onChange: () => { server?.broadcast({ type: 'agents_changed' }); server?.broadcast(triage.view()); } })
+    ? new AgentService({ myraypa, reader: githubReader, merger, dispatcher: github, audit, config, pause, now: overrides.now, onChange: () => { server?.broadcast({ type: 'agents_changed' }); server?.broadcast(triage.view()); } })
     : null;
-  const panels = createPanels({ config, google, myraypa, audit, registry, toolControl, triage, agents, reminderStore, memory, context: { count: (owner) => continuity.count(owner), list: (owner) => continuity.list(owner), forget: async (owner) => { const n = await continuity.clear(owner); server.sessions.forget(owner); return n; } }, connections: () => server?.connections() ?? [], isOwner: (identity) => server.canApprove(identity), now: overrides.now });
+  const panels = createPanels({ config, pause, google, myraypa, audit, registry, toolControl, triage, agents, reminderStore, memory, context: { count: (owner) => continuity.count(owner), list: (owner) => continuity.list(owner), forget: async (owner) => { const n = await continuity.clear(owner); server.sessions.forget(owner); return n; } }, connections: () => server?.connections() ?? [], isOwner: (identity) => server.canApprove(identity), now: overrides.now });
   server = createServer({ config, orchestrator, audit, triage, myraypa, auth: overrides.auth, stt, voice, agents, usage, panels, onSessionEnd: (session) => config.CONTINUITY_ENABLED && summarizeSession({ model, config, store: continuity, session, owner: session.email ?? session.user }), onConnection: (identity, emit) => reminders?.flush(identity.email ?? identity.user, emit) });
   reminders = new ReminderService({ store: reminderStore, deliver: (owner, msg) => server.notify(owner, msg) });
   // Se arranca desde index.js (start); en los tests no se programa nada.
@@ -160,5 +164,5 @@ export function createApp(config, overrides = {}) {
   });
   // Tickets nuevos: sondeo periódico a MyRAYPA (se arranca desde index.js). La marca de corte se crea al construirlo.
   const watcher = new TicketWatcher({ myraypa, triage, reviewed, scope, config, now: overrides.now, onBriefing: () => server.broadcast(triage.view()) });
-  return { server, google, panels, toolControl, memory, continuity, reminders, reminderStore, orchestrator, registry, audit, myraypa, github, githubReader, model, voice, stt, store, triage, scheduler, watcher, reviewed, agents, merger, usage, tracker };
+  return { server, pause, google, panels, toolControl, memory, continuity, reminders, reminderStore, orchestrator, registry, audit, myraypa, github, githubReader, model, voice, stt, store, triage, scheduler, watcher, reviewed, agents, merger, usage, tracker };
 }

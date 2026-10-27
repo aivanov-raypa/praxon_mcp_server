@@ -26,6 +26,30 @@ export function withoutThinking(messages) {
   return out;
 }
 
+/**
+ * Copia de los mensajes con un punto de caché en el último bloque: el historial ya enviado se reutiliza a precio reducido en el
+ * siguiente paso (cada llamada reenvía todo lo anterior). Con las instrucciones y herramientas son 2 de los 4 puntos permitidos.
+ * No toca el original ni marca bloques de razonamiento ni de texto vacío (la API los rechaza).
+ */
+export function withCacheBreakpoint(messages) {
+  if (!messages?.length) return messages;
+  const last = messages[messages.length - 1];
+  const marca = { cache_control: { type: 'ephemeral' } };
+  let content;
+  if (typeof last.content === 'string') {
+    if (!last.content) return messages;
+    content = [{ type: 'text', text: last.content, ...marca }];
+  } else if (Array.isArray(last.content) && last.content.length) {
+    const i = last.content.length - 1;
+    const b = last.content[i];
+    if (!b || b.type === 'thinking' || b.type === 'redacted_thinking' || (b.type === 'text' && !b.text)) return messages;
+    content = [...last.content.slice(0, i), { ...b, ...marca }];
+  } else {
+    return messages;
+  }
+  return [...messages.slice(0, -1), { ...last, content }];
+}
+
 export class AnthropicModel {
   #client;
   #maxTokens;
@@ -56,7 +80,7 @@ export class AnthropicModel {
         // Las instrucciones y las herramientas se repiten en cada llamada: se cachean.
         system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
         tools,
-        messages,
+        messages: withCacheBreakpoint(messages),
       },
       { signal },
     );

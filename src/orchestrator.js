@@ -45,8 +45,10 @@ export class Orchestrator {
   #system;
   #now;
   #voice;
+  #pause;
 
-  constructor({ model, registry, audit, config, systemPrompt, voice = null, now = Date.now }) {
+  constructor({ model, registry, audit, config, systemPrompt, voice = null, pause = null, now = Date.now }) {
+    this.#pause = pause;
     this.#voice = voice;
     this.#model = model;
     this.#registry = registry;
@@ -256,6 +258,11 @@ export class Orchestrator {
         results[k] = toolError(tu.id, `Parámetros no válidos (${detail}).`);
         continue;
       }
+      if (tool.risk === 'write' && this.#pause?.active) {
+        await this.#log({ event: 'tool_call', sessionId: session.id, tool: tool.name, ok: false, error: 'bloqueada: modo pausa' });
+        results[k] = toolError(tu.id, this.#pause.message());
+        continue;
+      }
 
       if (tool.risk === 'write' && this.#isDirect(tool, parsed.data, toolUses, turn, session)) {
         results[k] = await this.#execDirect(tool, parsed.data, tu, session, emit);
@@ -347,6 +354,11 @@ export class Orchestrator {
   }
 
   async #exec(tool, args, tu, session) {
+    // Última barrera: una confirmación pendiente de antes de la pausa tampoco se ejecuta.
+    if (tool.risk === 'write' && this.#pause?.active) {
+      await this.#log({ event: 'tool_call', sessionId: session.id, tool: tool.name, ok: false, error: 'bloqueada: modo pausa' });
+      return toolError(tu.id, this.#pause.message());
+    }
     if (this.#registry.isDisabled(tool.name)) return toolError(tu.id, `La herramienta ${tool.name} está desactivada por el usuario. No se ha hecho nada.`);
     const base = { sessionId: session.id, user: session.user, tool: tool.name, risk: tool.risk, args };
     if (tool.risk === 'write') {

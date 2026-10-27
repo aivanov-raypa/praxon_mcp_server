@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AgentService, branchOf, breveResumen } from '../src/agents/service.js';
 import { FakeGithubReader } from '../src/integrations/github-read.js';
-import { FakeGithubMerger } from '../src/integrations/github-merge.js';
+import { FakeGithubMerger, HttpGithubMerger } from '../src/integrations/github-merge.js';
 import { MemoryAudit } from '../src/audit/log.js';
 import { FakeMyraypa } from '../src/connectors/myraypa/fake.js';
 import { FakeGithub } from '../src/integrations/github.js';
@@ -11,13 +11,13 @@ const SHA = 'a'.repeat(40);
 const config = { GITHUB_WORKFLOW_FILE: 'praxon-agent.yml', AGENTS_QUEUE_TIMEOUT_MINUTES: 10, AGENTS_WATCH_SECONDS: 60 };
 const OK = { total: 2, ok: 2, fallando: 0, pendientes: 0, items: [] };
 
-async function build({ workflowRuns = [], pullRequests = [], merger = new FakeGithubMerger(), clock = Date.now(), dispatcher = new FakeGithub() } = {}) {
+async function build({ workflowRuns = [], pullRequests = [], merger = new FakeGithubMerger(), clock = Date.now(), dispatcher = new FakeGithub(), pause = null } = {}) {
   const myraypa = new FakeMyraypa();
   const run = await myraypa.createAgentRun({ ticketId: '215', tipo: 'mejora' }, 'test');
   const reader = new FakeGithubReader({ [REPO]: { workflowRuns, pullRequests } });
   const audit = new MemoryAudit();
   let changed = 0;
-  const svc = new AgentService({ myraypa, reader, merger, dispatcher, audit, config, now: () => clock, onChange: () => changed++ });
+  const svc = new AgentService({ myraypa, reader, merger, dispatcher, audit, config, pause, now: () => clock, onChange: () => changed++ });
   const state = () => myraypa.runs[0];
   return { myraypa, reader, merger, dispatcher, audit, svc, run, state, changed: () => changed, setClock: (t) => { clock = t; } };
 }
@@ -327,5 +327,97 @@ describe('ticket completado al fusionar', () => {
     expect(r.ticketCompletado).toBe(false);
     expect(b.state().estado).toBe('completado');
     expect(b.audit.events.some((e) => e.event === 'agent_ticket_completado' && e.ok === false)).toBe(true);
+  });
+});
+
+
+describe('rama destino de la fusión', () => {
+  const R = { ticketId: '215', runId: 'run-1' };
+  const ready = async (prExtra = {}, cfg = {}) => {
+    const b = await build({ workflowRuns: [wf(R, { estado: 'completed', resultado: 'success' })], pullRequests: [pr(R, prExtra)] });
+    Object.assign(config, cfg);
+    await b.svc.tick();
+    return b;
+  };
+  const sinBases = () => { delete config.MERGE_ALLOWED_BASES; };
+  const pedir = (b) => b.svc.merge({ runId: 'run-1', sha: SHA, numero: 12, user: 'alex' });
+
+  it('por defecto solo fusiona en develop: un PR contra main no es fusionable y no se llama a GitHub', async () => {
+    sinBases();
+    const b = await ready({ base: 'main' });
+    const [item] = await b.svc.list();
+    expect(item).toMatchObject({ fusionable: false });
+    expect(item.motivo).toMatch(/«main».*solo fusiona en: develop/);
+    const r = await pedir(b);
+    expect(r.ok).toBe(false);
+    expect(b.merger.merged).toHaveLength(0);
+    expect(b.audit.events.at(-1)).toMatchObject({ event: 'agent_merge', ok: false });
+    expect(b.state().estado).toBe('pendiente_revision');
+  });
+
+  it('un PR contra develop se fusiona', async () => {
+    sinBases();
+    const b = await ready({ base: 'develop' });
+    expect((await pedir(b)).ok).toBe(true);
+    expect(b.merger.merged[0]).toMatchObject({ allowedBases: ['develop'] });
+  });
+
+  it('si no se conoce la rama destino no se fusiona (falla cerrado)', async () => {
+    sinBases();
+    const b = await ready({ base: undefined });
+    expect((await pedir(b)).ok).toBe(false);
+    expect(b.merger.merged).toHaveLength(0);
+  });
+
+  it('la lista configurada admite varias ramas y "*" quita la restricción', async () => {
+    const dos = await ready({ base: 'staging' }, { MERGE_ALLOWED_BASES: ['develop', 'staging'] });
+    expect((await pedir(dos)).ok).toBe(true);
+    const todas = await ready({ base: 'main' }, { MERGE_ALLOWED_BASES: ['*'] });
+    expect((await pedir(todas)).ok).toBe(true);
+    sinBases();
+  });
+
+  it('si la rama destino cambia a main justo antes de fusionar, el fusionador lo rechaza', async () => {
+    sinBases();
+    const b = await ready({ base: 'develop' });
+    b.merger.base = 'main';
+    const r = await pedir(b);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/«main»/);
+    expect(b.merger.merged).toHaveLength(0);
+  });
+});
+
+describe('HttpGithubMerger: comprobación de la rama destino', () => {
+  const SHA40 = 'c'.repeat(40);
+  const montar = (baseActual) => {
+    const llamadas = [];
+    const fetchImpl = async (url, opts = {}) => {
+      llamadas.push(`${opts.method ?? 'GET'} ${String(url).replace('https://api.github.com', '')}`);
+      if (!opts.method) return { ok: true, status: 200, json: async () => ({ base: { ref: baseActual } }) };
+      return { ok: true, status: 200, json: async () => ({ merged: true, sha: SHA40 }) };
+    };
+    return { llamadas, merger: new HttpGithubMerger({ token: 't', fetchImpl }) };
+  };
+  const args = { repo: 'o/r', number: 7, sha: SHA40, titulo: 'x' };
+
+  it('rechaza sin llegar a hacer el PUT si el PR apunta a otra rama', async () => {
+    const { llamadas, merger } = montar('main');
+    await expect(merger.mergePull({ ...args, allowedBases: ['develop'] })).rejects.toThrow(/«main»/);
+    expect(llamadas).toEqual(['GET /repos/o/r/pulls/7']);
+  });
+
+  it('fusiona si la rama es la permitida, y con "*" no consulta la rama', async () => {
+    const ok = montar('develop');
+    expect((await ok.merger.mergePull({ ...args, allowedBases: ['develop'] })).fusionado).toBe(true);
+    expect(ok.llamadas).toEqual(['GET /repos/o/r/pulls/7', 'PUT /repos/o/r/pulls/7/merge']);
+    const todas = montar('main');
+    await todas.merger.mergePull({ ...args, allowedBases: ['*'] });
+    expect(todas.llamadas).toEqual(['PUT /repos/o/r/pulls/7/merge']);
+  });
+
+  it('si no puede comprobar la rama, no fusiona', async () => {
+    const merger = new HttpGithubMerger({ token: 't', fetchImpl: async () => ({ ok: false, status: 502, json: async () => ({}) }) });
+    await expect(merger.mergePull({ ...args, allowedBases: ['develop'] })).rejects.toThrow(/No he podido comprobar la rama destino/);
   });
 });

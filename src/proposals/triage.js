@@ -77,7 +77,10 @@ export class Triage {
 
   #scope;
 
-  constructor({ model, registry, audit, store, config, now = Date.now, memory = null, ticketLog = null, scope = null }) {
+  #pause;
+
+  constructor({ model, registry, audit, store, config, now = Date.now, memory = null, ticketLog = null, scope = null, pause = null }) {
+    this.#pause = pause;
     this.#scope = scope;
     this.#memory = memory;
     this.#ticketLog = ticketLog;
@@ -113,6 +116,7 @@ export class Triage {
 
   /** @returns {Promise<object>} la revision creada, o { omitida } si ya habia una en curso. */
   async run({ user, trigger = 'manual', focus = null }) {
+    if (this.#pause?.active) return { omitida: 'Praxon está en pausa: no se hacen revisiones.' };
     if (this.#running) return { omitida: 'Ya hay una revisión en curso.' };
     this.#running = true;
     const id = randomUUID();
@@ -205,7 +209,7 @@ export class Triage {
               continue;
             }
             try {
-              results.push(result(tu.id, serializeResult(await tool.execute(parsed.data, { session, user }), MAX_RESULT_CHARS)));
+              results.push(result(tu.id, serializeResult(await tool.execute(parsed.data, { session, user, automatica: true }), MAX_RESULT_CHARS)));
             } catch (err) {
               results.push(result(tu.id, err.message, true));
             }
@@ -375,6 +379,7 @@ export class Triage {
 
   /** El usuario aprueba o descarta una accion. */
   async decide({ briefingId, actionId, accepted, user }) {
+    if (accepted && this.#pause?.active) return { ok: false, mensaje: this.#pause.message() };
     const briefing = this.#store.get(briefingId);
     const action = briefing?.acciones.find((a) => a.id === actionId);
     if (!action) return { ok: false, mensaje: 'No existe esa propuesta.' };
@@ -402,6 +407,7 @@ export class Triage {
    * agente. Si un cambio falla o está obsoleto, el agente no se lanza y su opción sigue pendiente.
    */
   async decideGroup({ briefingId, grupo, aprobar = [], user }) {
+    if (aprobar.length && this.#pause?.active) return { ok: false, mensaje: this.#pause.message(), resultados: [] };
     const briefing = this.#store.get(briefingId);
     const miembros = briefing?.acciones.filter((a) => grupoDe(a) === grupo) ?? [];
     if (!miembros.length) return { ok: false, mensaje: 'No existe esa propuesta.', resultados: [] };

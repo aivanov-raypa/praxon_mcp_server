@@ -48,6 +48,17 @@ function plan(userText) {
   return [text('No te he entendido. Puedes preguntarme por tickets o proyectos.')];
 }
 
+/** Las listas llegan compactadas como { columnas, filas }: se vuelven a objetos para que el guion de pruebas las lea. */
+function filasAObjetos(v) {
+  if (v && Array.isArray(v.columnas) && Array.isArray(v.filas)) return v.filas.map((f) => Object.fromEntries(v.columnas.map((c, i) => [c, f[i]])));
+  return v;
+}
+function parseResultado(content) {
+  const data = JSON.parse(content);
+  if (data && typeof data === 'object') for (const k of Object.keys(data)) data[k] = filasAObjetos(data[k]);
+  return data;
+}
+
 function afterTools(messages, userText) {
   const results = messages.at(-1).content.filter((b) => b.type === 'tool_result');
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
@@ -55,7 +66,7 @@ function afterTools(messages, userText) {
   const first = results[0];
   let data = {};
   try {
-    data = JSON.parse(first.content);
+    data = parseResultado(first.content);
   } catch {
     /* el resultado no es JSON: se trata como error */
   }
@@ -94,7 +105,7 @@ function triagePlan(messages) {
   if (used.includes('myraypa_listar_tickets')) {
     let tickets = [];
     try {
-      tickets = JSON.parse(lastResults[0].content).tickets ?? [];
+      tickets = parseResultado(lastResults[0].content).tickets ?? [];
     } catch {
       /* sin datos */
     }

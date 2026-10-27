@@ -18,9 +18,29 @@ export class HttpGithubMerger {
     this.#fetch = fetchImpl;
   }
 
-  async mergePull({ repo, number, sha, titulo }) {
+  async #baseOf(repo, number) {
+    let res;
+    try {
+      res = await this.#fetch(`https://api.github.com/repos/${repo}/pulls/${number}`, {
+        headers: { Authorization: `Bearer ${this.#token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch (err) {
+      throw new GithubMergeError(`No he podido conectar con GitHub (${err.message}).`);
+    }
+    if (!res.ok) throw new GithubMergeError(`No he podido comprobar la rama destino (GitHub ha respondido ${res.status}). No se fusiona.`);
+    const data = await res.json().catch(() => ({}));
+    return data?.base?.ref ?? null;
+  }
+
+  async mergePull({ repo, number, sha, titulo, allowedBases }) {
     if (!REPO.test(repo ?? '') || !Number.isInteger(number) || !/^[0-9a-f]{40}$/.test(sha ?? '')) {
       throw new GithubMergeError('Datos de fusión no válidos.');
+    }
+    // Última barrera: la rama destino se vuelve a leer justo antes de fusionar (alguien pudo cambiarla tras la revisión).
+    if (Array.isArray(allowedBases) && !allowedBases.includes('*')) {
+      const base = await this.#baseOf(repo, number);
+      if (!allowedBases.includes(base)) throw new GithubMergeError(baseNoPermitida(base, allowedBases));
     }
     let res;
     try {
@@ -47,11 +67,19 @@ export class HttpGithubMerger {
   }
 }
 
+export const baseNoPermitida = (base, permitidas) =>
+  `El pull request apunta a «${base ?? 'desconocida'}» y Praxon solo fusiona en: ${permitidas.join(', ')}. Cámbialo a una de esas ramas o fusiónalo tú en GitHub.`;
+
 export class FakeGithubMerger {
   merged = [];
   failNext = null;
+  /** Rama destino "real" en el momento de fusionar (para probar la comprobación final). Null = no se comprueba. */
+  base = null;
 
   async mergePull(args) {
+    if (this.base !== null && Array.isArray(args.allowedBases) && !args.allowedBases.includes('*') && !args.allowedBases.includes(this.base)) {
+      throw new GithubMergeError(baseNoPermitida(this.base, args.allowedBases));
+    }
     if (this.failNext) {
       const m = this.failNext;
       this.failNext = null;

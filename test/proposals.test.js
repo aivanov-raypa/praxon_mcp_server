@@ -9,10 +9,10 @@ import { config as baseConfig, setup, stubModel, use } from './helpers.js';
 const cfg = loadConfig({ PRAXON_TOKEN: 'token-largo-123456' });
 const config = { ...baseConfig, ...cfg };
 
-function build({ model, now = () => Date.UTC(2026, 9, 23, 6, 30) } = {}) {
+function build({ model, now = () => Date.UTC(2026, 9, 23, 6, 30), pause = null } = {}) {
   const s = setup();
   const store = new ProposalStore(null);
-  const triage = new Triage({ model, registry: s.registry, audit: s.audit, store, config, now });
+  const triage = new Triage({ model, registry: s.registry, audit: s.audit, store, config, now, pause });
   return { ...s, store, triage };
 }
 

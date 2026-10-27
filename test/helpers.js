@@ -9,12 +9,12 @@ import { ToolRegistry } from '../src/tools/registry.js';
 
 export const config = { MODEL_DEFAULT: 'test', MAX_TOOL_ITERATIONS: 6, MAX_HISTORY_MESSAGES: 40, CONFIRM_TTL_MS: 60_000 };
 
-export function setup({ model = new ScriptedModel(), now, voice = null } = {}) {
+export function setup({ model = new ScriptedModel(), now, voice = null, pause = null } = {}) {
   const myraypa = new FakeMyraypa();
   const github = new FakeGithub();
   const audit = new MemoryAudit();
   const registry = new ToolRegistry().registerConnector(createMyraypaConnector({ client: myraypa, github }));
-  const orchestrator = new Orchestrator({ model, registry, audit, config, systemPrompt: 'test', voice, now });
+  const orchestrator = new Orchestrator({ model, registry, audit, config, systemPrompt: 'test', voice, pause, now });
   const session = new Session('sesion-de-prueba-1', 'alex');
   const out = [];
   const emit = (m) => out.push(m);

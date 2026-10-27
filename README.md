@@ -65,6 +65,9 @@ Para configurarlo de verdad, copia `.env.example` a `.env`:
 | `GITHUB_READ_TOKEN` | Token de grano fino solo lectura (Contents, Pull requests, Metadata) para que la revisión y la conversación consulten el código del repositorio de cada proyecto (`github_buscar_codigo`, `github_leer_codigo`, `github_commits_recientes`, `github_pull_requests`). Sin él no hay consulta de código |
 | `GITHUB_MERGE_TOKEN` | Token de grano fino PROPIO (Pull requests y Contents en escritura) con el que la app fusiona los pull requests de los agentes. Sin él se puede revisar el diff pero no fusionar. La fusión va atada al SHA revisado y nunca se hace por voz |
 | `GITHUB_MERGE_METHOD` | `squash` (por defecto), `merge` o `rebase` |
+| `MERGE_ALLOWED_BASES` | Ramas destino en las que Praxon puede fusionar, separadas por comas. Por defecto `develop`: nunca `main`. `*` quita la restricción. Se comprueba al listar, al fusionar y justo antes de llamar a GitHub |
+| `PAUSE_PATH` | Fichero del interruptor de emergencia (`./data/pausa.json`). Si existe, Praxon está en pausa |
+| `ATTACH_CONFIRM_KB` | Adjuntos legibles de más de estos KB (300 por defecto) no se leen sin que el usuario lo confirme; en la revisión automática se omiten. 0 = sin límite |
 | `AGENTS_WATCH` / `AGENTS_WATCH_SECONDS` | Seguimiento de los agentes en GitHub (por defecto sí, cada 60 s). Necesita que `GITHUB_READ_TOKEN` tenga además Actions y Checks (y Commit statuses) en lectura |
 | `AGENTS_QUEUE_TIMEOUT_MINUTES` | Minutos en cola sin que GitHub arranque el workflow antes de marcar el agente como fallido (10) |
 | `USAGE_PATH` / `USAGE_CACHE_MINUTES` | Historial de consumo propio de Praxon (tokens de Anthropic por modelo, caracteres de voz y segundos de dictado, por día; 90 días) y minutos de caché de los datos externos (10) |
@@ -197,3 +200,13 @@ Con `STT_PROVIDER=elevenlabs` (y `ELEVENLABS_API_KEY`) la app deja de usar el re
 no está pensado para escuchar de forma continua: captura el micrófono ella misma y el servidor transcribe en directo.
 Variables: `STT_LANGUAGE` (`es`), `STT_SILENCE_SECS` (1,2), `STT_MAX_SECONDS` (45), `ELEVENLABS_STT_URL`. Protocolo en `docs/protocol.md`.
 En la app, el ajuste "Conversación continua" hace que vuelva a escuchar sola tras cada respuesta hasta que haya silencio.
+
+
+## Modo pausa (interruptor de emergencia)
+
+Detiene al instante todo lo que tiene efectos: cambios en MyRAYPA (por voz, confirmados o directos), deshacer, lanzar agentes, pedir cambios, fusionar, ejecutar propuestas, revisiones automáticas y seguimiento de agentes. Siguen funcionando la conversación, las consultas y descartar propuestas.
+
+- **Desde la app:** Estado, sección Seguridad, "Modo pausa" (Pausar sin confirmación; Reanudar pide confirmación). Solo quien puede aprobar.
+- **Desde el servidor** (funciona aunque la app no responda): `npm run pausa -- on "motivo"`, `npm run pausa -- off`, `npm run pausa` (estado).
+- Es un fichero (`PAUSE_PATH`): sobrevive a reinicios y se mira en cada decisión, sin reiniciar. Queda en la auditoría (`pause_on`, `pause_off`).
+- El modelo no puede activarlo ni desactivarlo.

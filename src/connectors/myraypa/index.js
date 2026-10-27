@@ -6,9 +6,9 @@ import { documentosTools } from './tools/documentos.js';
 import { roadmapsTools } from './tools/roadmaps.js';
 
 /** Conector de MyRAYPA: tickets y proyectos del modulo de Tickets de raypa-platform, y agentes de desarrollo. */
-export function createMyraypaConnector({ client, github }) {
+export function createMyraypaConnector({ client, github, config = {} }) {
   return {
     name: 'myraypa',
-    tools: [...consultaTools(client), ...gestionTools(client), ...extrasTools(client), ...documentosTools(client), ...roadmapsTools(client), ...agentesTools(client, github)],
+    tools: [...consultaTools(client, config.ATTACH_CONFIRM_KB === undefined ? undefined : { confirmarAdjuntosKb: config.ATTACH_CONFIRM_KB }), ...gestionTools(client), ...extrasTools(client), ...documentosTools(client), ...roadmapsTools(client), ...agentesTools(client, github)],
   };
 }

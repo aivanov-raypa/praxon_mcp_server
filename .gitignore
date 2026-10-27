@@ -8,3 +8,4 @@ coverage/
 .sf/data/
 .sf/
 data/
+.deploy.lock

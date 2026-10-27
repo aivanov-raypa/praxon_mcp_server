@@ -282,7 +282,7 @@ export class FakeGithubReader {
     const p = (this.#repo(repo).pullRequests ?? []).find((x) => x.numero === Number(number));
     if (!p) throw new GithubReadError('No existe, o el token de lectura no tiene acceso a ese repositorio.');
     const { files, checks, ...rest } = p;
-    return { url: `https://github.com/${repo}/pull/${p.numero}`, base: 'main', mergeable: true, archivos: files?.length ?? 0, adiciones: 0, borrados: 0, ...rest };
+    return { url: `https://github.com/${repo}/pull/${p.numero}`, base: 'develop', mergeable: true, archivos: files?.length ?? 0, adiciones: 0, borrados: 0, ...rest };
   }
 
   async checksFor({ repo, sha }) {

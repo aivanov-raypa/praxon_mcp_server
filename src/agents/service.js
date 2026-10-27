@@ -6,6 +6,8 @@
  * - merge(): fusion del PR atada al SHA revisado y a que el usuario teclee el numero del PR. Solo se llama desde la app
  *   (mensaje agent_merge): no es una herramienta del modelo, asi que no puede hacerse por voz ni por conversacion.
  */
+import { baseNoPermitida } from '../integrations/github-merge.js';
+
 /** Columna de "completado" de un proyecto: la de id done o la que se llame completado/finalizado/hecho/terminado. */
 const COLUMNA_FINAL = /complet|finaliz|hecho|terminad|done/i;
 
@@ -52,7 +54,10 @@ export class AgentService {
   #busy = false;
   #onChange;
 
-  constructor({ myraypa, reader, merger = null, dispatcher = null, audit, config, now = Date.now, onChange = () => {} }) {
+  #pause;
+
+  constructor({ myraypa, reader, merger = null, dispatcher = null, audit, config, now = Date.now, onChange = () => {}, pause = null }) {
+    this.#pause = pause;
     this.#dispatcher = dispatcher;
     this.#myraypa = myraypa;
     this.#reader = reader;
@@ -112,7 +117,8 @@ export class AgentService {
 
   /** Una pasada de seguimiento. Devuelve cuantos agentes han cambiado de estado. */
   async tick() {
-    if (this.#busy) return { omitido: true };
+    // En pausa no se escribe nada en MyRAYPA: al reanudar, el siguiente sondeo se pone al día con GitHub.
+    if (this.#busy || this.#pause?.active) return { omitido: true };
     this.#busy = true;
     let cambios = 0;
     try {
@@ -227,10 +233,18 @@ export class AgentService {
     );
   }
 
+  /** Ramas destino permitidas (por defecto solo develop). Si falta la configuración se aplica el valor seguro, nunca "todas". */
+  #basesPermitidas() {
+    const l = this.#config.MERGE_ALLOWED_BASES;
+    return Array.isArray(l) && l.length ? l : ['develop'];
+  }
+
   #fusionable(pr, checks) {
     let motivo = null;
+    const bases = this.#basesPermitidas();
     if (!this.#merger) motivo = 'La fusión no está configurada en el servidor.';
     else if (pr.estado !== 'abierto') motivo = 'El pull request ya no está abierto.';
+    else if (!bases.includes('*') && !bases.includes(pr.base)) motivo = baseNoPermitida(pr.base, bases);
     else if (pr.mergeable === false) motivo = 'El pull request tiene conflictos con la rama base.';
     else if (!checks) motivo = 'No he podido comprobar los checks.';
     else if (checks.fallando > 0) motivo = 'Hay checks fallando.';
@@ -261,6 +275,7 @@ export class AgentService {
   async requestChanges({ runId, feedback, user }) {
     const evento = { event: 'agent_request_changes', user, runId };
     try {
+      if (this.#pause?.active) throw new AgentError(this.#pause.message());
       if (!this.#dispatcher) throw new AgentError('Pedir cambios no está disponible en el servidor.');
       const texto = String(feedback ?? '').trim();
       if (texto.length < 10) throw new AgentError('Explica con algo más de detalle qué hay que cambiar.');
@@ -324,6 +339,7 @@ export class AgentService {
   async merge({ runId, sha, numero, user }) {
     const evento = { event: 'agent_merge', user, runId };
     try {
+      if (this.#pause?.active) throw new AgentError(this.#pause.message());
       const { run, pr } = await this.#runAndPr(runId);
       Object.assign(evento, { repo: run.repo, pr: pr.numero, sha });
       if (numero !== pr.numero) throw new AgentError('El número del pull request no coincide.');
@@ -331,7 +347,7 @@ export class AgentService {
       const checks = await this.#checks(run, pr);
       const f = this.#fusionable(pr, checks);
       if (!f.fusionable) throw new AgentError(f.motivo);
-      await this.#merger.mergePull({ repo: run.repo, number: pr.numero, sha: pr.sha, titulo: pr.titulo });
+      await this.#merger.mergePull({ repo: run.repo, number: pr.numero, sha: pr.sha, titulo: pr.titulo, allowedBases: this.#basesPermitidas() });
       await this.#patch(run, { estado: 'completado' });
       const ticketCompletado = await this.#completarTicket(run, user);
       // Dejar constancia en el ticket. La confirmación de la fusión ya cubre este comentario; si falla, la fusión sigue siendo válida.

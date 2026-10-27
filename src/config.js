@@ -32,6 +32,8 @@ const schema = z
     GOOGLE_WORK_END: z.coerce.number().int().min(1).max(24).default(18),
     GOOGLE_MAIL_BODY_MAX: z.coerce.number().int().min(200).max(20000).default(3000),
     GITHUB_TOKEN: z.string().optional(),
+    // Adjuntos legibles de más de estos KB no se leen sin que el usuario lo confirme (0 = sin límite). En la revisión automática se omiten.
+    ATTACH_CONFIRM_KB: z.coerce.number().int().min(0).default(300),
     GITHUB_WORKFLOW_FILE: z.string().default('praxon-agent.yml'),
     // Lectura del código de los proyectos (revisión y conversación). Token de grano fino SOLO de lectura
     // (Contents, Pull requests, Metadata), distinto de GITHUB_TOKEN. Sin él, el asistente no consulta código.
@@ -54,7 +56,15 @@ const schema = z
     // Intentos de conexión fallidos por IP antes de bloquearla temporalmente.
     AUTH_FAIL_MAX: z.coerce.number().int().positive().default(20),
     AUTH_FAIL_WINDOW_MINUTES: z.coerce.number().positive().default(10),
+    // Fichero del interruptor de emergencia: si existe, Praxon está en pausa (ver safety/pause.js).
+    PAUSE_PATH: z.string().default('./data/pausa.json'),
     GITHUB_MERGE_METHOD: z.enum(['squash', 'merge', 'rebase']).default('squash'),
+    // Ramas destino en las que Praxon puede fusionar (separadas por comas). Por defecto solo develop: nunca main ni producción.
+    // "*" desactiva la restricción (no recomendado). Se comprueba al listar, al fusionar y de nuevo justo antes de llamar a GitHub.
+    MERGE_ALLOWED_BASES: z
+      .string()
+      .default('develop')
+      .transform((v) => v.split(',').map((x) => x.trim()).filter(Boolean)),
     // Seguimiento de agentes: sondeo a GitHub (necesita GITHUB_READ_TOKEN con Actions y Checks en lectura).
     AGENTS_WATCH: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
     AGENTS_WATCH_SECONDS: z.coerce.number().min(15).default(60),
