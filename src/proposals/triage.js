@@ -78,9 +78,11 @@ export class Triage {
   #scope;
 
   #pause;
+  #budget;
 
-  constructor({ model, registry, audit, store, config, now = Date.now, memory = null, ticketLog = null, scope = null, pause = null }) {
+  constructor({ model, registry, audit, store, config, now = Date.now, memory = null, ticketLog = null, scope = null, pause = null, budget = null }) {
     this.#pause = pause;
+    this.#budget = budget;
     this.#scope = scope;
     this.#memory = memory;
     this.#ticketLog = ticketLog;
@@ -117,6 +119,8 @@ export class Triage {
   /** @returns {Promise<object>} la revision creada, o { omitida } si ya habia una en curso. */
   async run({ user, trigger = 'manual', focus = null }) {
     if (this.#pause?.active) return { omitida: 'Praxon está en pausa: no se hacen revisiones.' };
+    const sinPresupuesto = this.#budget?.blocks('revision');
+    if (sinPresupuesto) return { omitida: sinPresupuesto };
     if (this.#running) return { omitida: 'Ya hay una revisión en curso.' };
     this.#running = true;
     const id = randomUUID();
@@ -157,6 +161,7 @@ export class Triage {
       for (let step = 0; step < this.#config.TRIAGE_MAX_STEPS && !finished; step++) {
         let message;
         for await (const ev of this.#model.stream({
+          uso: 'revision',
           system: buildTriagePrompt({ name: this.#config.ASSISTANT_NAME, user, now: new Date(this.#now()), maxActions: this.#config.TRIAGE_MAX_ACTIONS, allowed: [...this.#allowed()], code: code ? maxCode : 0, focus, memoria: this.#memory?.render() }),
           messages,
           tools,

@@ -211,7 +211,7 @@ export class Orchestrator {
         if (turn.aborted) return;
         console.error('[modelo]', String(err.message).slice(0, 500));
         await this.#log({ event: 'model_error', sessionId: session.id, message: err.message });
-        this.#say(turn, emit, { type: 'error', message: 'No he podido consultar el modelo. Inténtalo de nuevo.' });
+        this.#say(turn, emit, { type: 'error', message: err.name === 'BudgetError' ? err.message : 'No he podido consultar el modelo. Inténtalo de nuevo.' });
         return;
       }
       if (turn.aborted) return;

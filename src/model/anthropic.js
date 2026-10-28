@@ -61,18 +61,18 @@ export class AnthropicModel {
     this.#maxTokens = maxTokens;
   }
 
-  async *stream({ system, messages, tools, model, signal }) {
+  async *stream({ system, messages, tools, model, signal, uso }) {
     try {
-      yield* this.#run({ system, messages, tools, model, signal });
+      yield* this.#run({ system, messages, tools, model, signal, uso });
     } catch (err) {
       // Los bloques de razonamiento del historial van ligados al prompt con el que se crearon. Si ya no coincide (p. ej. cambió el
       // día en mitad de una conversación), la API los rechaza con un 400: se reintenta una vez sin ellos en vez de fallar.
       if (!isThinkingBindingError(err)) throw err;
-      yield* this.#run({ system, messages: withoutThinking(messages), tools, model, signal });
+      yield* this.#run({ system, messages: withoutThinking(messages), tools, model, signal, uso });
     }
   }
 
-  async *#run({ system, messages, tools, model, signal }) {
+  async *#run({ system, messages, tools, model, signal, uso }) {
     const stream = this.#client.messages.stream(
       {
         model,
@@ -99,6 +99,7 @@ export class AnthropicModel {
           output: u.output_tokens ?? 0,
           cacheRead: u.cache_read_input_tokens ?? 0,
           cacheWrite: u.cache_creation_input_tokens ?? 0,
+          uso,
         });
       } catch {
         /* el contador nunca debe romper una respuesta */

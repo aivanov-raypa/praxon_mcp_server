@@ -56,6 +56,19 @@ const schema = z
     // Intentos de conexión fallidos por IP antes de bloquearla temporalmente.
     AUTH_FAIL_MAX: z.coerce.number().int().positive().default(20),
     AUTH_FAIL_WINDOW_MINUTES: z.coerce.number().positive().default(10),
+    // Tope de gasto del modelo (ver safety/budget.js). Estimación en euros a partir de los tokens y de estos precios (USD por millón de
+    // tokens, los de Claude Sonnet 5.5; si usas otro modelo, ajústalos). 0 desactiva cada límite.
+    BUDGET_DAILY_EUR: z.coerce.number().min(0).default(5),
+    BUDGET_TRIAGE_DAILY_EUR: z.coerce.number().min(0).default(1.5),
+    BUDGET_WARN_PCT: z.coerce.number().min(1).max(100).default(70),
+    BUDGET_TRIM_PCT: z.coerce.number().min(1).max(100).default(90),
+    BUDGET_MAX_CALLS_PER_MIN: z.coerce.number().int().min(0).default(40),
+    BUDGET_MAX_CALLS_PER_HOUR: z.coerce.number().int().min(0).default(600),
+    COST_INPUT_USD_MTOK: z.coerce.number().min(0).default(2),
+    COST_OUTPUT_USD_MTOK: z.coerce.number().min(0).default(10),
+    COST_CACHE_WRITE_USD_MTOK: z.coerce.number().min(0).default(2.5),
+    COST_CACHE_READ_USD_MTOK: z.coerce.number().min(0).default(0.2),
+    COST_EUR_PER_USD: z.coerce.number().positive().default(0.9),
     // Fichero del interruptor de emergencia: si existe, Praxon está en pausa (ver safety/pause.js).
     PAUSE_PATH: z.string().default('./data/pausa.json'),
     GITHUB_MERGE_METHOD: z.enum(['squash', 'merge', 'rebase']).default('squash'),

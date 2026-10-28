@@ -37,12 +37,12 @@ const GRUPO_DE = {
   tool_call: 'cambios', tool_call_start: 'cambios', direct_write: 'cambios', confirm_requested: 'cambios', confirm_result: 'cambios', panel_action: 'cambios',
   triage_run: 'revisiones', triage_error: 'revisiones', proposal_decision: 'revisiones',
   agent_merge: 'agentes', agent_request_changes: 'agentes', workflow_dispatch: 'agentes',
-  pause_on: 'avisos', pause_off: 'avisos', auth_failed: 'accesos', approval_denied: 'accesos', device_paired: 'accesos', device_revoked: 'accesos', device_pair_failed: 'accesos', connection_open: 'accesos', connection_close: 'accesos',
+  pause_on: 'avisos', pause_off: 'avisos', budget_level: 'avisos', auth_failed: 'accesos', approval_denied: 'accesos', device_paired: 'accesos', device_revoked: 'accesos', device_pair_failed: 'accesos', connection_open: 'accesos', connection_close: 'accesos',
   user_text: 'conversacion', stt_start: 'conversacion', model_error: 'conversacion',
 };
 const NOMBRE_EVENTO = {
   tool_call: 'Herramienta usada', tool_call_start: 'Herramienta iniciada', direct_write: 'Cambio directo', confirm_requested: 'Confirmación pedida', confirm_result: 'Confirmación resuelta',
-  panel_action: 'Acción en la app', pause_on: 'Modo pausa activado', pause_off: 'Modo pausa desactivado', triage_run: 'Revisión de tickets', triage_error: 'Revisión fallida', proposal_decision: 'Decisión sobre propuesta', agent_merge: 'Pull request fusionado',
+  panel_action: 'Acción en la app', budget_level: 'Tope de gasto: cambio de nivel', pause_on: 'Modo pausa activado', pause_off: 'Modo pausa desactivado', triage_run: 'Revisión de tickets', triage_error: 'Revisión fallida', proposal_decision: 'Decisión sobre propuesta', agent_merge: 'Pull request fusionado',
   agent_request_changes: 'Cambios pedidos al agente', workflow_dispatch: 'Agente lanzado', auth_failed: 'Acceso rechazado', approval_denied: 'Aprobación denegada', device_paired: 'Móvil vinculado',
   device_revoked: 'Móvil revocado', device_pair_failed: 'Vinculación fallida', connection_open: 'Conexión abierta', connection_close: 'Conexión cerrada', user_text: 'Mensaje del usuario',
   stt_start: 'Dictado iniciado', model_error: 'Error del modelo', internal_error: 'Error interno',
@@ -60,7 +60,7 @@ const dia = (iso) => (iso && !Number.isNaN(Date.parse(iso)) ? new Date(iso).toIS
 const opcion = (valor, etiqueta = valor) => ({ valor, etiqueta });
 const unico = (lista, valor, defecto) => (lista.includes(valor) ? valor : defecto);
 
-export function createPanels({ config, pause = null, google = null, myraypa, audit, registry, toolControl, triage = null, agents = null, reminderStore = null, memory = null, context = null, connections = () => [], isOwner, now = Date.now, startedAt = Date.now() }) {
+export function createPanels({ config, pause = null, budget = null, google = null, myraypa, audit, registry, toolControl, triage = null, agents = null, reminderStore = null, memory = null, context = null, connections = () => [], isOwner, now = Date.now, startedAt = Date.now() }) {
   const ownerKey = (identity) => identity.email ?? identity.user;
 
   // ---------- Hoy ----------
@@ -247,6 +247,19 @@ export function createPanels({ config, pause = null, google = null, myraypa, aud
               acciones: [{ id: 'pausar', etiqueta: 'Pausar', peligro: true }],
             },
       );
+    }
+    if (budget) {
+      const b = budget.status();
+      const e = (n) => `${(Math.round(n * 100) / 100).toFixed(2).replace('.', ',')} €`;
+      const nivelTxt = { normal: 'NORMAL', aviso: 'AVISO', recorte: 'RECORTE', corte: 'CORTADO' }[b.nivel];
+      const estadoNivel = { normal: 'ok', aviso: 'aviso', recorte: 'error', corte: 'error' }[b.nivel];
+      const partes = [
+        b.topeEur > 0 ? `${e(b.gastoEur)} de ${e(b.topeEur)} hoy (${Math.round(b.pct)} %)` : `${e(b.gastoEur)} hoy, sin tope`,
+        b.revision.topeEur > 0 ? `revisiones ${e(b.revision.gastoEur)} de ${e(b.revision.topeEur)}` : null,
+        `llamadas ${b.llamadas.minuto}${b.llamadas.maxMinuto ? `/${b.llamadas.maxMinuto}` : ''} en el último minuto, ${b.llamadas.hora}${b.llamadas.maxHora ? `/${b.llamadas.maxHora}` : ''} en la última hora`,
+        'estimación; la cifra exacta es la de Anthropic',
+      ].filter(Boolean);
+      seguridad.push({ id: 'presupuesto', titulo: 'Tope de gasto diario', detalle: partes.join(' · '), estado: b.topeEur > 0 ? estadoNivel : 'info', chips: [{ texto: b.topeEur > 0 ? nivelTxt : 'SIN TOPE', estado: b.topeEur > 0 ? estadoNivel : 'info' }] });
     }
     const aprobadores = (config.MERGE_ALLOWED_USERS ?? []).length;
     seguridad.push({ id: 'seguridad', titulo: 'Acceso y aprobaciones', detalle: `token compartido ${config.ALLOW_LEGACY_TOKEN ? 'ACTIVADO' : 'desactivado'} · aprobadores ${aprobadores || 'cualquier dispositivo emparejado'} · host ${config.HOST}`, estado: config.ALLOW_LEGACY_TOKEN || !aprobadores ? 'aviso' : 'ok' });

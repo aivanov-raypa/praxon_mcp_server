@@ -9,7 +9,9 @@ import { dirname } from 'node:path';
  * Se guarda en disco (path) y conserva KEEP_DAYS dias.
  */
 const KEEP_DAYS = 90;
-const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10);
+// Día de Madrid (en-CA da AAAA-MM-DD): el tope diario se reinicia a medianoche de Madrid, no de UTC.
+const FECHA_MADRID = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit' });
+const dayOf = (ms) => FECHA_MADRID.format(new Date(ms));
 
 export class UsageTracker {
   #path;
@@ -35,8 +37,21 @@ export class UsageTracker {
     return (this.#days[k] ??= { anthropic: {}, elevenlabs: { ttsChars: 0, ttsCalls: 0, sttSeconds: 0, sttCalls: 0 } });
   }
 
-  /** Una llamada al modelo: tokens de entrada, salida y de cache. */
-  recordModel({ model, input = 0, output = 0, cacheRead = 0, cacheWrite = 0 }) {
+  /** Tokens de hoy por modelo ({ modelo: {input, output, cacheRead, cacheWrite} }), de todo o solo de un uso ('revision', 'resumen'...). */
+  todayTokens(uso = null) {
+    const d = this.#days[dayOf(this.#now())];
+    if (!d) return {};
+    return uso ? { ...(d.uso?.[uso] ?? {}) } : { ...d.anthropic };
+  }
+
+  /** Una llamada al modelo: tokens de entrada, salida y de cache. `uso` dice para qué fue (conversacion, revision, resumen). */
+  recordModel({ model, input = 0, output = 0, cacheRead = 0, cacheWrite = 0, uso = 'conversacion' }) {
+    const u = (((this.#today().uso ??= {})[uso] ??= {})[model || 'desconocido'] ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, calls: 0 });
+    u.input += input;
+    u.output += output;
+    u.cacheRead += cacheRead;
+    u.cacheWrite += cacheWrite;
+    u.calls += 1;
     const m = ((this.#today().anthropic[model || 'desconocido'] ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, calls: 0 }));
     m.input += input;
     m.output += output;

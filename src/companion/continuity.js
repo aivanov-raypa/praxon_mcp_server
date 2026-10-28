@@ -130,6 +130,7 @@ export async function summarizeSession({ model, config, store, session, owner, m
     let message;
     try {
       for await (const ev of model.stream({
+        uso: 'resumen',
         system: PROMPT,
         messages: [{ role: 'user', content: transcript }],
         tools: [],

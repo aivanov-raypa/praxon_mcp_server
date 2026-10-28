@@ -141,6 +141,27 @@ npm test
 Cubren las confirmaciones (no ejecutar sin confirmar, caducidad, un solo uso, otra sesión, corte de conexión), el registro
 de riesgos, la auditoría obligatoria, las interrupciones, los agentes y el flujo completo por WebSocket.
 
+## Servidor Ubuntu (instalación y despliegues)
+
+Primera vez, en el servidor y como root: `scripts/setup-server.sh` instala Node 22, git y pm2, crea el usuario `praxon`, genera una
+clave de despliegue de solo lectura, clona el repositorio, prepara el `.env` desde `.env.example` (con un `PRAXON_TOKEN`
+aleatorio), abre el puerto solo a la red interna con ufw y deja pm2 arrancando con la máquina.
+
+```bash
+sudo bash setup-server.sh --repo git@github.com:ORG/praxon_mcp_server.git --lan 192.168.1.0/24
+```
+
+Si GitHub aún no conoce la clave, el script la muestra y se detiene: añádela en Settings -> Deploy keys (sin permiso de
+escritura) y repite el mismo comando. Después rellena el `.env` en el servidor y ejecuta el primer despliegue:
+
+```bash
+sudo -u praxon -H nano /opt/praxon/app/.env
+sudo -u praxon -H /opt/praxon/app/scripts/deploy.sh
+```
+
+Los despliegues siguientes son siempre `deploy.sh` (copia de seguridad, `git pull --ff-only`, `npm ci`, pruebas, pm2, comprobación
+de `/health` y vuelta atrás si falla). git usa la clave de despliegue y nunca pide contraseña.
+
 ## Pendiente
 
 - Probar contra una base de datos real con muchos proyectos y tickets (la API está implementada; ver `docs/myraypa-api.md`).
@@ -210,3 +231,14 @@ Detiene al instante todo lo que tiene efectos: cambios en MyRAYPA (por voz, conf
 - **Desde el servidor** (funciona aunque la app no responda): `npm run pausa -- on "motivo"`, `npm run pausa -- off`, `npm run pausa` (estado).
 - Es un fichero (`PAUSE_PATH`): sobrevive a reinicios y se mira en cada decisión, sin reiniciar. Queda en la auditoría (`pause_on`, `pause_off`).
 - El modelo no puede activarlo ni desactivarlo.
+
+## Tope de gasto diario
+
+Segunda barrera dentro de Praxon, detrás del límite del workspace de Anthropic. Todo acceso al modelo pasa por un guardián (`src/safety/budget.js`).
+
+- **Gasto estimado** = tokens del día (de cada llamada) x precios configurables, en euros. Es una estimación; la cifra exacta es la de la consola de Anthropic. El día es el de Madrid.
+- **Escalones** sobre `BUDGET_DAILY_EUR` (5 por defecto): aviso al `BUDGET_WARN_PCT` (70 %), solo en auditoría (`budget_level`) y Estado; recorte al `BUDGET_TRIM_PCT` (90 %), se paran la revisión automática y los resúmenes pero se puede hablar; corte al 100 %, no se llama más al modelo hasta el día siguiente.
+- **Revisión automática con presupuesto propio:** `BUDGET_TRIAGE_DAILY_EUR` (1,5). Al agotarse solo se paran las revisiones.
+- **Límite de llamadas:** `BUDGET_MAX_CALLS_PER_MIN` (40) y `BUDGET_MAX_CALLS_PER_HOUR` (600), contra bucles y usos anómalos.
+- **Precios (USD por millón de tokens):** `COST_INPUT_USD_MTOK` (2), `COST_OUTPUT_USD_MTOK` (10), `COST_CACHE_WRITE_USD_MTOK` (2,5), `COST_CACHE_READ_USD_MTOK` (0,2) y `COST_EUR_PER_USD` (0,9). Son los de Claude Sonnet 5.5; si cambias de modelo o de tarifa, ajústalos. 0 en cualquier límite lo desactiva.
+- Se ve en Estado, sección Seguridad ("Tope de gasto diario"). No cubre a los agentes de desarrollo de GitHub Actions (otra clave) ni a ElevenLabs.

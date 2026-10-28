@@ -18,6 +18,7 @@ import { ToolRegistry } from './tools/registry.js';
 import { ToolControl } from './tools/control.js';
 import { createPanels } from './panels.js';
 import { PauseSwitch } from './safety/pause.js';
+import { BudgetGuard, GuardedModel } from './safety/budget.js';
 import { ProposalStore } from './proposals/store.js';
 import { ContinuityStore, summarizeSession } from './companion/continuity.js';
 import { UndoStore, installUndo, undoTools } from './companion/undo.js';
@@ -56,11 +57,14 @@ export function createApp(config, overrides = {}) {
   const githubReader = overrides.githubReader ?? (config.GITHUB_READ_TOKEN ? new HttpGithubReader({ token: config.GITHUB_READ_TOKEN }) : null);
   const merger = overrides.merger ?? (config.GITHUB_MERGE_TOKEN ? new HttpGithubMerger({ token: config.GITHUB_MERGE_TOKEN, method: config.GITHUB_MERGE_METHOD }) : null);
   const tracker = overrides.usageTracker ?? new UsageTracker(config.USAGE_PATH, { now: overrides.now });
-  const model =
+  // Tope de gasto diario y límite de llamadas (ver safety/budget.js): todo acceso al modelo pasa por este guardián.
+  const budget = overrides.budget ?? new BudgetGuard({ tracker, config, audit, now: overrides.now });
+  const baseModel =
     overrides.model ??
     (config.MODEL_PROVIDER === 'anthropic'
       ? new AnthropicModel({ apiKey: config.ANTHROPIC_API_KEY, maxTokens: config.MAX_TOKENS, onUsage: (u) => tracker.recordModel(u) })
       : new ScriptedModel());
+  const model = new GuardedModel(baseModel, budget);
 
   const voice =
     overrides.voice ??
@@ -113,7 +117,7 @@ export function createApp(config, overrides = {}) {
   const reminderStore = overrides.reminderStore ?? new ReminderStore(config.REMINDERS_PATH, { now: overrides.now });
   const reviewed = overrides.reviewed ?? new ReviewedStore(config.REVIEWED_PATH, { from: config.TRIAGE_WATCH_FROM, now: overrides.now });
   const scope = new ReviewScope({ myraypa, reviewed, config, now: overrides.now });
-  const triage = new Triage({ model, registry, audit, store, config, pause, now: overrides.now, memory, ticketLog, scope });
+  const triage = new Triage({ model, registry, audit, store, config, pause, budget, now: overrides.now, memory, ticketLog, scope });
   registry.registerConnector({ name: 'praxon', tools: [...proposalTools({ store, triage, client: myraypa, scope, config, onReviewed: (b, owner) => { server?.broadcast(triage.view()); if (owner) server?.notify(owner, { type: 'reminder', id: `revision-${b.id}`, texto: b.acciones?.length ? `Revisión terminada. Tienes ${b.acciones.length} ${b.acciones.length === 1 ? 'propuesta' : 'propuestas'} pendientes en Trabajo.` : 'Revisión terminada. No propongo ningún cambio.' }); } }), ...contextoTools(), ...screenTools(), ...reminderTools({ store: reminderStore }), ...memoryTools({ memory })] });
   installUndo({ registry, client: myraypa, undo });
   registry.registerConnector({ name: 'praxon', tools: undoTools({ undo, client: myraypa }) });
@@ -150,7 +154,7 @@ export function createApp(config, overrides = {}) {
   const agents = githubReader
     ? new AgentService({ myraypa, reader: githubReader, merger, dispatcher: github, audit, config, pause, now: overrides.now, onChange: () => { server?.broadcast({ type: 'agents_changed' }); server?.broadcast(triage.view()); } })
     : null;
-  const panels = createPanels({ config, pause, google, myraypa, audit, registry, toolControl, triage, agents, reminderStore, memory, context: { count: (owner) => continuity.count(owner), list: (owner) => continuity.list(owner), forget: async (owner) => { const n = await continuity.clear(owner); server.sessions.forget(owner); return n; } }, connections: () => server?.connections() ?? [], isOwner: (identity) => server.canApprove(identity), now: overrides.now });
+  const panels = createPanels({ config, pause, budget, google, myraypa, audit, registry, toolControl, triage, agents, reminderStore, memory, context: { count: (owner) => continuity.count(owner), list: (owner) => continuity.list(owner), forget: async (owner) => { const n = await continuity.clear(owner); server.sessions.forget(owner); return n; } }, connections: () => server?.connections() ?? [], isOwner: (identity) => server.canApprove(identity), now: overrides.now });
   server = createServer({ config, orchestrator, audit, triage, myraypa, auth: overrides.auth, stt, voice, agents, usage, panels, onSessionEnd: (session) => config.CONTINUITY_ENABLED && summarizeSession({ model, config, store: continuity, session, owner: session.email ?? session.user }), onConnection: (identity, emit) => reminders?.flush(identity.email ?? identity.user, emit) });
   reminders = new ReminderService({ store: reminderStore, deliver: (owner, msg) => server.notify(owner, msg) });
   // Se arranca desde index.js (start); en los tests no se programa nada.
@@ -164,5 +168,5 @@ export function createApp(config, overrides = {}) {
   });
   // Tickets nuevos: sondeo periódico a MyRAYPA (se arranca desde index.js). La marca de corte se crea al construirlo.
   const watcher = new TicketWatcher({ myraypa, triage, reviewed, scope, config, now: overrides.now, onBriefing: () => server.broadcast(triage.view()) });
-  return { server, pause, google, panels, toolControl, memory, continuity, reminders, reminderStore, orchestrator, registry, audit, myraypa, github, githubReader, model, voice, stt, store, triage, scheduler, watcher, reviewed, agents, merger, usage, tracker };
+  return { server, pause, budget, google, panels, toolControl, memory, continuity, reminders, reminderStore, orchestrator, registry, audit, myraypa, github, githubReader, model, voice, stt, store, triage, scheduler, watcher, reviewed, agents, merger, usage, tracker };
 }

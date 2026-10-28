@@ -12,6 +12,9 @@
 # BACKUP_KEEP (copias que se conservan, 14), HEALTH_URL (por defecto http://127.0.0.1:<PORT>/health).
 # No lee ni muestra el contenido de .env: solo el valor de PORT para la comprobación.
 set -Eeuo pipefail
+# git nunca debe quedarse esperando una contraseña: usa la clave de despliegue por SSH o falla.
+export GIT_TERMINAL_PROMPT=0
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
 
 APP_DIR="${APP_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # git pull puede reemplazar este mismo fichero mientras se ejecuta (bash lo lee poco a poco): se ejecuta desde una copia temporal.
@@ -54,6 +57,12 @@ exec 9>"$APP_DIR/.deploy.lock"
 flock -n 9 || fail "Ya hay un despliegue en curso."
 
 [ -f .env ] || fail "No existe .env en $APP_DIR."
+envval() { grep -E "^$1=" .env | tail -1 | cut -d= -f2- | tr -d '[:space:]"'"'"; }
+need() { [ -n "$(envval "$1")" ] || fail "Falta rellenar $1 en .env."; }
+need PRAXON_TOKEN
+[ "$(envval MODEL_PROVIDER)" != anthropic ] || need ANTHROPIC_API_KEY
+if [ "$(envval MYRAYPA_MODE)" = http ]; then need MYRAYPA_API_URL; need MYRAYPA_API_TOKEN; fi
+if [ "$(envval GITHUB_MODE)" = http ]; then need GITHUB_TOKEN; need GITHUB_READ_TOKEN; fi
 [ -z "$(git status --porcelain --untracked-files=no)" ] || fail "Hay cambios locales sin confirmar en el código; confírmalos o descártalos antes de desplegar."
 
 PREV_SHA="$(git rev-parse HEAD)"
