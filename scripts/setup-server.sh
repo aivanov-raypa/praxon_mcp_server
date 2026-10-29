@@ -145,6 +145,8 @@ else
   as_app env GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes' git clone --branch "$BRANCH" "$REPO" "$APP_DIR"
 fi
 chmod +x "$APP_DIR/scripts/"*.sh 2>/dev/null || true
+# Si los .sh se subieron sin permiso de ejecución (p. ej. desde Windows), el chmod anterior no debe contar como "cambio local".
+as_app git -C "$APP_DIR" config core.fileMode false
 
 # 7. .env (token aleatorio, sin mostrarlo)
 log "7/9 Configuración (.env)"
