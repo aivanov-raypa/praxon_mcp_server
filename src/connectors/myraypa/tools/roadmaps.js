@@ -27,7 +27,7 @@ export function roadmapsTools(client) {
       connector,
       name: 'listar_roadmaps',
       risk: 'read',
-      description: 'Lista los roadmaps vinculados a proyectos habilitados para el asistente, con sus fechas y cuántos bloques e hitos tienen. Se pueden filtrar por proyecto o por texto del título.',
+      description: 'Lista los roadmaps que el usuario ha creado o en los que participa (no dependen de proyectos), con sus fechas y cuántos bloques e hitos tienen. Se pueden filtrar por proyecto o por texto del título.',
       input: z.object({ proyectoId: proyectoId.optional(), texto: z.string().max(100).optional(), limite: z.number().int().min(1).max(10).default(5) }),
       execute: async ({ limite, ...f }) => client.listRoadmaps({ ...f, limit: limite }),
     }),

@@ -348,7 +348,7 @@ export class FakeMyraypa {
   // ── Roadmaps e hitos ──
   #roadmap(id) {
     const r = this.roadmaps.find((x) => x.id === id);
-    if (!r) throw new MyraypaError('Roadmap no encontrado o ninguno de sus proyectos está habilitado para el asistente.', 404);
+    if (!r) throw new MyraypaError('Roadmap no encontrado o no eres su creador ni participante.', 404);
     return r;
   }
 

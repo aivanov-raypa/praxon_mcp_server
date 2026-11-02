@@ -65,7 +65,7 @@ Errores: `{ "message": "..." }` con 400, 401, 403, 404, 409 o 503; el servidor P
 
 ## Roadmaps e hitos
 
-Un roadmap es visible para el asistente solo si algún proyecto vinculado (`linkedProjectId` en bloque, tarea o subtarea) está habilitado. Modificarlo exige autonomía `tickets` o superior en alguno de esos proyectos. Las fechas son siempre `AAAA-MM-DD`.
+Los roadmaps son independientes de los proyectos: un roadmap es visible para el asistente solo si el usuario al que representa es su creador o participante (no se incluyen los de visibilidad "empresa"). Modificarlo exige ser el creador o participante con permiso `edit`. El parámetro `proyecto` de `GET /roadmaps` solo filtra por vínculo, no concede acceso. Los hitos de proyecto sí dependen del proyecto (habilitado y autonomía `tickets` o superior). Las fechas son siempre `AAAA-MM-DD`.
 
 | Método | Ruta | Uso |
 |---|---|---|
