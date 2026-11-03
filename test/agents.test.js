@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AgentService, branchOf, breveResumen } from '../src/agents/service.js';
+import { AgentService, branchOf, breveResumen, notaParaTicket } from '../src/agents/service.js';
 import { FakeGithubReader } from '../src/integrations/github-read.js';
 import { FakeGithubMerger, HttpGithubMerger } from '../src/integrations/github-merge.js';
 import { MemoryAudit } from '../src/audit/log.js';
@@ -136,13 +136,13 @@ describe('comentario tras fusionar', () => {
     return b;
   };
 
-  it('deja un comentario breve en el ticket con el PR y lo que se ha cambiado', async () => {
+  it('sin nota para el ticket, deja un comentario breve con el PR y el resumen, sin cifras técnicas', async () => {
     const b = await merged();
     const r = await b.svc.merge({ runId: 'run-1', sha: SHA, numero: 12, user: 'alex' });
     expect(r).toMatchObject({ ok: true, comentado: true });
     const c = b.myraypa.tickets.find((t) => t.id === '215').comentarios.at(-1);
     expect(c.texto).toContain('PR #12');
-    expect(c.texto).toContain('+20 −5');
+    expect(c.texto).not.toContain('+20');
     expect(c.texto).toContain('exportación a PDF');
     expect(c.texto).not.toContain('Run de Praxon');
     expect(c.texto).not.toContain('Generado por');
@@ -151,12 +151,37 @@ describe('comentario tras fusionar', () => {
     expect(b.audit.of('agent_merge')[0]).toMatchObject({ ok: true, comentado: true });
   });
 
+  it('con nota para el ticket, comenta en lenguaje funcional: qué cambia, cómo probarlo y limitaciones', async () => {
+    const nota = 'Qué cambia:\nAhora se puede descargar el certificado en PDF desde su ficha.\n\nCómo probarlo:\n1. Abre un certificado.\n2. Pulsa Descargar PDF.\n\nLimitaciones / fuera de alcance:\nNo incluye certificados de más de 50 páginas.';
+    const resumen = `Ticket MyRAYPA: 215\nRun de Praxon: run-1\n\n## Nota para el ticket\n${nota}\n\n## Detalle técnico\nSe añade el servicio pdf.js y se toca certificados.controller.js.\n\nGenerado por el agente de Praxon. Requiere revisión humana antes de fusionar.`;
+    const r0 = { ticketId: '215', runId: 'run-1' };
+    const b = await build({ workflowRuns: [wf(r0, { estado: 'completed', resultado: 'success' })], pullRequests: [pr(r0, { resumen })] });
+    await b.svc.tick();
+    const r = await b.svc.merge({ runId: 'run-1', sha: SHA, numero: 12, user: 'alex' });
+    expect(r).toMatchObject({ ok: true, comentado: true });
+    const t = b.myraypa.tickets.find((x) => x.id === '215').comentarios.at(-1).texto;
+    expect(t).toContain('Qué cambia:');
+    expect(t).toContain('Cómo probarlo:');
+    expect(t).toContain('Limitaciones / fuera de alcance:');
+    expect(t).toContain('Referencia: PR #12.');
+    expect(t).not.toContain('pdf.js');
+    expect(t).not.toContain('controller');
+    expect(t).not.toContain('Run de Praxon');
+  });
+
   it('si el comentario falla, la fusión sigue siendo correcta', async () => {
     const b = await merged();
     b.myraypa.commentTicket = async () => { throw new Error('MyRAYPA no responde'); };
     const r = await b.svc.merge({ runId: 'run-1', sha: SHA, numero: 12, user: 'alex' });
     expect(r).toMatchObject({ ok: true, comentado: false });
     expect(b.state().estado).toBe('completado');
+  });
+
+  it('notaParaTicket: extrae solo la sección, sin formato Markdown, y devuelve vacío si no existe', () => {
+    const md = '## Nota para el ticket\n**Qué cambia:** el botón\n\n- paso `uno`\n\n## Detalle técnico\nfichero.js';
+    expect(notaParaTicket(md)).toBe('Qué cambia: el botón\n\n- paso uno');
+    expect(notaParaTicket('Solo un resumen')).toBe('');
+    expect(notaParaTicket(`## Nota para el ticket\n${'Línea larga.\n'.repeat(400)}`, 200).length).toBeLessThanOrEqual(201);
   });
 
   it('recorta el resumen sin pasar de la longitud máxima', () => {

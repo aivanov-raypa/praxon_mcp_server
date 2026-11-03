@@ -30,6 +30,28 @@ export function breveResumen(texto, max = 260) {
   return punto > max * 0.5 ? corte.slice(0, punto + 1) : `${corte.slice(0, corte.lastIndexOf(' ') > 0 ? corte.lastIndexOf(' ') : max)}…`;
 }
 
+/**
+ * Texto funcional para el ticket: la sección "Nota para el ticket" de la descripción del PR (la redacta el agente en lenguaje
+ * de negocio: qué cambia, cómo probarlo y limitaciones). Va hasta el siguiente encabezado. Texto plano: los comentarios de
+ * MyRAYPA se guardan línea a línea, así que se quita el formato Markdown. Devuelve '' si el PR no la trae.
+ */
+export function notaParaTicket(texto, max = 3000) {
+  const lineas = String(texto ?? '').replace(/\r/g, '').split('\n');
+  const inicio = lineas.findIndex((l) => /^#{1,6}\s*nota para el ticket\s*:?\s*$/i.test(l.trim()));
+  if (inicio < 0) return '';
+  const cuerpo = [];
+  for (const l of lineas.slice(inicio + 1)) {
+    const t = l.trim();
+    if (/^#{1,6}\s/.test(t) || /^Generado por el agente de Praxon/.test(t)) break;
+    cuerpo.push(l.trimEnd());
+  }
+  const limpio = cuerpo.join('\n').replace(/[*`_>]/g, '').replace(/\n{3,}/g, '\n\n').trim();
+  if (limpio.length <= max) return limpio;
+  const corte = limpio.slice(0, max);
+  const salto = corte.lastIndexOf('\n');
+  return `${(salto > max * 0.5 ? corte.slice(0, salto) : corte).trimEnd()}…`;
+}
+
 /** Marca en `pregunta` de una ejecución que se está iterando sobre un PR existente; guarda el id del workflow anterior. */
 const ITERANDO = 'Aplicando los cambios pedidos';
 const marcaIteracion = (anterior) => `${ITERANDO} [tras ejecución ${anterior ?? 'ninguna'}]`;
@@ -361,12 +383,20 @@ export class AgentService {
     }
   }
 
-  /** Comentario breve en el ticket tras fusionar: qué se ha cambiado y en qué PR. */
+  /**
+   * Comentario en el ticket tras fusionar, en lenguaje funcional: qué cambia, cómo probarlo y limitaciones (la "Nota para el
+   * ticket" que redacta el agente). Si el PR no la trae, un resumen breve sin detalle técnico.
+   */
   async #comentar(run, pr, user) {
-    const cambios = `${pr.archivos} archivo${pr.archivos === 1 ? '' : 's'}, +${pr.adiciones} −${pr.borrados}`;
-    const cabecera = `Cambio fusionado por el agente de desarrollo (PR #${pr.numero}, ${cambios}): ${pr.titulo}.`;
-    const detalle = breveResumen(pr.resumen);
-    const texto = (detalle ? `${cabecera} ${detalle}` : cabecera).slice(0, 480);
+    const nota = notaParaTicket(pr.resumen);
+    let texto;
+    if (nota) {
+      texto = `${nota}\n\nReferencia: PR #${pr.numero}.`;
+    } else {
+      const cabecera = `Cambio fusionado por el agente de desarrollo (PR #${pr.numero}): ${pr.titulo}.`;
+      const detalle = breveResumen(pr.resumen);
+      texto = (detalle ? `${cabecera} ${detalle}` : cabecera).slice(0, 480);
+    }
     try {
       await this.#myraypa.commentTicket(run.ticketId, texto, { type: 'voice-assistant', user, sessionId: `fusion-${run.runId}` });
       return true;
