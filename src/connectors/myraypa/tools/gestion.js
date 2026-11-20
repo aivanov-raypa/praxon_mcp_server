@@ -59,6 +59,28 @@ export function gestionTools(client) {
     }),
     defineTool({
       connector,
+      name: 'editar_ticket',
+      risk: 'write',
+      description: 'Cambia el título de un ticket o AÑADE texto al final de su descripción. No puede borrar ni reescribir la descripción que ya tiene: solo añadir. Para cambiar estado, prioridad, asignado o completado usa actualizar_ticket.',
+      input: z
+        .object({
+          ticketId,
+          titulo: z.string().trim().min(1).max(200).optional().describe('Título nuevo completo'),
+          anadirDescripcion: z.string().trim().min(1).max(2000).optional().describe('Texto que se añade al final de la descripción'),
+        })
+        .refine((a) => a.titulo || a.anadirDescripcion, { message: 'indica un título nuevo o el texto que quieres añadir' }),
+      summarize: async (a) => {
+        const tk = await client.getTicket(a.ticketId);
+        const cambios = [];
+        if (a.titulo && a.titulo !== tk.titulo) cambios.push(`cambiar el título de «${recorta(tk.titulo, 60)}» a «${recorta(a.titulo, 100)}»`);
+        if (a.anadirDescripcion) cambios.push(`añadir a la descripción: «${recorta(a.anadirDescripcion, 160)}»`);
+        if (!cambios.length) throw new Error(`El ticket ${tk.titulo} ya tiene ese título; no hay nada que cambiar.`);
+        return `Voy a ${cambios.join(' y ')} en el ${etiqueta(tk)}`;
+      },
+      execute: async ({ ticketId: id, ...cambios }, { session }) => client.updateTicket(id, cambios, originOf(session)),
+    }),
+    defineTool({
+      connector,
       name: 'comentar_ticket',
       risk: 'write',
       description: 'Añade un comentario a un ticket.',

@@ -264,6 +264,12 @@ export class FakeMyraypa {
     if (cambios.prioridad !== undefined) set('prioridad', 'prioridad', parsePrioridad(cambios.prioridad));
     if (cambios.asignado !== undefined) set('asignado', 'asignado', cambios.asignado);
     if (cambios.completado !== undefined) set('completado', 'completado', cambios.completado);
+    if (cambios.titulo !== undefined) set('titulo', 'titulo', cambios.titulo);
+    if (cambios.anadirDescripcion !== undefined) {
+      const antes = tk.descripcion ?? '';
+      tk.descripcion = antes ? `${antes}\n${cambios.anadirDescripcion}` : cambios.anadirDescripcion;
+      aplicados.descripcion = { de: antes, a: tk.descripcion };
+    }
     if (!Object.keys(aplicados).length) throw new MyraypaError('El ticket ya tiene esos valores; no hay nada que cambiar.', 409);
     this.historial.push({ ticketId: tk.id, accion: 'actualizar', cambios: aplicados, origin });
     return this.#vista(tk);
@@ -339,7 +345,7 @@ export class FakeMyraypa {
   async cancelAgentRun(runId, origin) {
     const run = this.runs.find((r) => r.runId === runId);
     if (!run) throw new MyraypaError('Agente no encontrado.', 404);
-    if (!['en_cola', 'en_curso', 'bloqueado'].includes(run.estado)) throw new MyraypaError(`El agente ya está ${run.estado.replace('_', ' ')}; no se puede cancelar.`, 409);
+    if (!['en_cola', 'en_curso', 'bloqueado', 'pendiente_revision'].includes(run.estado)) throw new MyraypaError(`El agente ya está ${run.estado.replace('_', ' ')}; no se puede cancelar.`, 409);
     run.estado = 'cancelado';
     this.historial.push({ ticketId: run.ticketId, accion: 'cancelar_agente', runId, origin });
     return { ...run };

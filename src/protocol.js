@@ -75,6 +75,13 @@ export const clientMessage = z.discriminatedUnion('type', [
     sha: z.string().regex(/^[0-9a-f]{40}$/),
     numero: z.number().int().positive(),
   }),
+  // Cancelar un agente abierto. Con cerrarPr=true cierra también su pull request sin fusionar (entonces `numero` es obligatorio).
+  z.object({
+    type: z.literal('agent_cancel'),
+    runId: z.string().min(1).max(64),
+    cerrarPr: z.boolean().optional(),
+    numero: z.number().int().positive().optional(),
+  }),
   // Pedir cambios sobre un PR: relanza el agente sobre la misma rama con este comentario. No fusiona nada.
   z.object({ type: z.literal('agent_request_changes'), runId: z.string().min(1).max(64), feedback: z.string().trim().min(1).max(1500) }),
 ]);

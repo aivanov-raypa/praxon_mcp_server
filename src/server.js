@@ -195,15 +195,27 @@ export function createServer({
     if (!agents) {
       emit({ type: 'error', message: 'El seguimiento de agentes no está configurado (falta GITHUB_READ_TOKEN).' });
     } else if (msg.type === 'agents_list') {
-      emit({ type: 'agents', canMerge: agents.canMerge && canApprove(identity), canRequestChanges: agents.canRequestChanges && canApprove(identity), items: await agents.list() });
+      emit({
+        type: 'agents',
+        canMerge: agents.canMerge && canApprove(identity),
+        canRequestChanges: agents.canRequestChanges && canApprove(identity),
+        canCancel: agents.canCancel && canApprove(identity),
+        canClosePull: agents.canClosePull && canApprove(identity),
+        items: await agents.list(),
+      });
     } else if (msg.type === 'agents_history') {
       emit({ type: 'agents_history', items: await agents.history({ limit: msg.limit }) });
     } else if (msg.type === 'agent_diff') {
       const d = await agents.diff(msg.runId).catch((err) => ({ error: err.message }));
       emit({ type: 'agent_diff', runId: msg.runId, ...d });
-    } else if ((msg.type === 'agent_request_changes' || msg.type === 'agent_merge') && !canApprove(identity)) {
+    } else if ((msg.type === 'agent_request_changes' || msg.type === 'agent_merge' || msg.type === 'agent_cancel') && !canApprove(identity)) {
       log({ event: 'approval_denied', type: msg.type, user: identity.user, deviceId: identity.deviceId, runId: msg.runId });
-      emit({ type: msg.type === 'agent_merge' ? 'agent_merge_result' : 'agent_changes_result', runId: msg.runId, ok: false, error: 'Tu usuario no tiene permiso para esta acción.' });
+      const tipo = { agent_merge: 'agent_merge_result', agent_cancel: 'agent_cancel_result' }[msg.type] ?? 'agent_changes_result';
+      emit({ type: tipo, runId: msg.runId, ok: false, error: 'Tu usuario no tiene permiso para esta acción.' });
+    } else if (msg.type === 'agent_cancel') {
+      const r = await agents.cancel({ runId: msg.runId, user: identity.user, numero: msg.numero ?? null, cerrarPr: msg.cerrarPr === true });
+      emit({ type: 'agent_cancel_result', runId: msg.runId, ...r });
+      broadcast({ type: 'agents_changed' });
     } else if (msg.type === 'agent_request_changes') {
       const r = await agents.requestChanges({ runId: msg.runId, feedback: msg.feedback, user: identity.user });
       emit({ type: 'agent_changes_result', runId: msg.runId, ...r });

@@ -446,3 +446,79 @@ describe('HttpGithubMerger: comprobación de la rama destino', () => {
     await expect(merger.mergePull({ ...args, allowedBases: ['develop'] })).rejects.toThrow(/No he podido comprobar la rama destino/);
   });
 });
+
+describe('cancelar agentes y cerrar pull requests', () => {
+  const r = { ticketId: '215', runId: 'run-1' };
+  const enRevision = (extra = {}) => build({ workflowRuns: [wf(r, { estado: 'completed', resultado: 'success' })], pullRequests: [pr(r, extra)] });
+
+  it('un agente en curso se cancela: se para la ejecución de GitHub y deja de estar abierto', async () => {
+    const b = await build({ workflowRuns: [wf(r)] });
+    await b.svc.tick();
+    expect(b.state().estado).toBe('en_curso');
+    const res = await b.svc.cancel({ runId: 'run-1', user: 'alex' });
+    expect(res).toMatchObject({ ok: true, prCerrado: null });
+    expect(b.state().estado).toBe('cancelado');
+    expect(b.dispatcher.cancelled).toEqual([{ repo: REPO, githubRunId: '777' }]);
+    expect(await b.svc.list()).toEqual([]);
+    expect(b.audit.of('agent_cancel')[0]).toMatchObject({ ok: true, user: 'alex', estadoAnterior: 'en_curso' });
+    expect(b.changed()).toBeGreaterThan(0);
+  });
+
+  it('cerrar el PR: lo cierra sin fusionar y el agente queda cancelado', async () => {
+    const b = await enRevision();
+    await b.svc.tick();
+    expect(b.state().estado).toBe('pendiente_revision');
+    const res = await b.svc.cancel({ runId: 'run-1', user: 'alex', numero: 12, cerrarPr: true });
+    expect(res).toMatchObject({ ok: true, prCerrado: 12 });
+    expect(b.merger.closed).toEqual([{ repo: REPO, number: 12 }]);
+    expect(b.merger.merged).toEqual([]);
+    expect(b.state().estado).toBe('cancelado');
+  });
+
+  it('si el número del PR no coincide, no se cierra nada', async () => {
+    const b = await enRevision();
+    await b.svc.tick();
+    const res = await b.svc.cancel({ runId: 'run-1', user: 'alex', numero: 99, cerrarPr: true });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/no coincide/);
+    expect(b.merger.closed).toEqual([]);
+    expect(b.state().estado).toBe('pendiente_revision');
+  });
+
+  it('sin permiso de cierre en el servidor no se puede cerrar el PR, pero sí cancelar el agente', async () => {
+    const b = await build({ workflowRuns: [wf(r, { estado: 'completed', resultado: 'success' })], pullRequests: [pr(r)], merger: null });
+    await b.svc.tick();
+    expect(b.svc.canClosePull).toBe(false);
+    const no = await b.svc.cancel({ runId: 'run-1', user: 'alex', numero: 12, cerrarPr: true });
+    expect(no.error).toMatch(/no está configurado/);
+    expect((await b.svc.cancel({ runId: 'run-1', user: 'alex' })).ok).toBe(true);
+  });
+
+  it('un agente que ya terminó no se puede cancelar, y en pausa tampoco', async () => {
+    const hecho = await build({ workflowRuns: [wf(r, { estado: 'completed', resultado: 'success' })], pullRequests: [pr(r, { estado: 'fusionado' })] });
+    await hecho.svc.tick();
+    expect((await hecho.svc.cancel({ runId: 'run-1', user: 'alex' })).error).toMatch(/ya no está abierto/);
+    const pausado = await build({ workflowRuns: [wf(r)], pause: { active: true, message: () => 'Praxon está en pausa.' } });
+    expect((await pausado.svc.cancel({ runId: 'run-1', user: 'alex' })).error).toMatch(/pausa/);
+  });
+
+  it('si el PR ya estaba cerrado en GitHub, cancela el agente sin intentar cerrarlo otra vez', async () => {
+    const b = await build({ workflowRuns: [wf(r, { estado: 'completed', resultado: 'success' })], pullRequests: [pr(r, { estado: 'cerrado' })] });
+    b.myraypa.runs[0].estado = 'pendiente_revision';
+    const res = await b.svc.cancel({ runId: 'run-1', user: 'alex', numero: 12, cerrarPr: true });
+    expect(res).toMatchObject({ ok: true, prCerrado: null });
+    expect(b.merger.closed).toEqual([]);
+  });
+
+  it('HttpGithubMerger.closePull: PATCH state=closed y errores claros', async () => {
+    const llamadas = [];
+    const ok = new HttpGithubMerger({ token: 't', fetchImpl: async (url, opts) => { llamadas.push({ url, ...opts }); return { ok: true, status: 200, json: async () => ({}) }; } });
+    expect(await ok.closePull({ repo: 'o/r', number: 7 })).toEqual({ cerrado: true });
+    expect(llamadas[0].method).toBe('PATCH');
+    expect(llamadas[0].url).toBe('https://api.github.com/repos/o/r/pulls/7');
+    expect(JSON.parse(llamadas[0].body)).toEqual({ state: 'closed' });
+    const sinPermiso = new HttpGithubMerger({ token: 't', fetchImpl: async () => ({ ok: false, status: 403, json: async () => ({}) }) });
+    await expect(sinPermiso.closePull({ repo: 'o/r', number: 7 })).rejects.toThrow(/no tiene permiso/);
+    await expect(ok.closePull({ repo: 'malo', number: 7 })).rejects.toThrow(/no válidos/);
+  });
+});

@@ -65,6 +65,30 @@ export class HttpGithubMerger {
     const data = await res.json().catch(() => ({}));
     return { fusionado: data.merged !== false, sha: data.sha ?? null };
   }
+
+  /** Cierra un pull request sin fusionarlo (PATCH state=closed). Mismo token que la fusión: Pull requests en escritura. */
+  async closePull({ repo, number }) {
+    if (!REPO.test(repo ?? '') || !Number.isInteger(number)) throw new GithubMergeError('Datos de cierre no válidos.');
+    let res;
+    try {
+      res = await this.#fetch(`https://api.github.com/repos/${repo}/pulls/${number}`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${this.#token}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ state: 'closed' }),
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch (err) {
+      throw new GithubMergeError(`No he podido conectar con GitHub (${err.message}).`);
+    }
+    if (res.status === 401 || res.status === 403 || res.status === 404) throw new GithubMergeError('El token no es válido o no tiene permiso para cerrar pull requests en este repositorio.');
+    if (!res.ok) throw new GithubMergeError(`GitHub ha respondido ${res.status} al cerrar el pull request.`);
+    return { cerrado: true };
+  }
 }
 
 export const baseNoPermitida = (base, permitidas) =>
@@ -87,5 +111,16 @@ export class FakeGithubMerger {
     }
     this.merged.push(args);
     return { fusionado: true, sha: 'f'.repeat(40) };
+  }
+
+  closed = [];
+  async closePull(args) {
+    if (this.failNext) {
+      const m = this.failNext;
+      this.failNext = null;
+      throw new GithubMergeError(m);
+    }
+    this.closed.push(args);
+    return { cerrado: true };
   }
 }

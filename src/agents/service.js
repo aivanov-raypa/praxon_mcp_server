@@ -98,6 +98,15 @@ export class AgentService {
     return Boolean(this.#dispatcher);
   }
 
+  /** Cancelar un agente abierto solo necesita MyRAYPA; cerrar además su pull request necesita el token de escritura de GitHub. */
+  get canCancel() {
+    return true;
+  }
+
+  get canClosePull() {
+    return typeof this.#merger?.closePull === 'function';
+  }
+
   async #patch(run, cambios) {
     try {
       await this.#myraypa.patchAgentRun(run.runId, cambios);
@@ -377,6 +386,50 @@ export class AgentService {
       await this.#audit.record({ ...evento, ok: true, comentado, ticketCompletado });
       this.#onChange();
       return { ok: true, pr: pr.numero, comentado, ticketCompletado };
+    } catch (err) {
+      await this.#audit.record({ ...evento, ok: false, error: err.message });
+      return { ok: false, error: err.message };
+    }
+  }
+
+  /**
+   * Cierra un agente abierto (en cola, en curso, bloqueado o pendiente de revisión): para la ejecución de GitHub si sigue
+   * en marcha, cierra el pull request SIN fusionar si se pide, y lo marca como cancelado en MyRAYPA (deja de salir en los
+   * abiertos). `numero` es el PR que el usuario ha visto en la app; al cerrar el PR debe coincidir con el real.
+   */
+  async cancel({ runId, user, numero = null, cerrarPr = false }) {
+    const evento = { event: 'agent_cancel', user, runId, cerrarPr };
+    try {
+      if (this.#pause?.active) throw new AgentError(this.#pause.message());
+      const run = await this.#myraypa.getAgentRun({ runId });
+      if (!run) throw new AgentError('No existe ese agente.');
+      if (!ABIERTOS.includes(run.estado)) throw new AgentError('Ese agente ya no está abierto.');
+      Object.assign(evento, { repo: run.repo, estadoAnterior: run.estado });
+      let prCerrado = null;
+      if (cerrarPr) {
+        if (!this.canClosePull) throw new AgentError('El cierre de pull requests no está configurado en el servidor.');
+        const pr = await this.#reader.findPull({ repo: run.repo, branch: branchOf(run) }).catch(() => null);
+        if (pr?.estado === 'abierto') {
+          if (numero !== pr.numero) throw new AgentError('El número del pull request no coincide.');
+          await this.#merger.closePull({ repo: run.repo, number: pr.numero });
+          prCerrado = pr.numero;
+          evento.pr = pr.numero;
+        }
+      }
+      if (run.githubRunId && ['en_cola', 'en_curso'].includes(run.estado)) {
+        await this.#dispatcher?.cancelWorkflowRun?.({ repo: run.repo, githubRunId: run.githubRunId }).catch((err) => console.error('[agentes]', `no se ha podido parar la ejecución ${run.githubRunId}:`, err.message));
+      }
+      let aviso = null;
+      try {
+        await this.#myraypa.cancelAgentRun(runId, { type: 'voice-assistant', user, sessionId: `cancel-${runId}` });
+      } catch (err) {
+        // Con el PR ya cerrado, el seguimiento automático lo pasará solo a fallido; no se deshace nada.
+        if (prCerrado === null) throw err;
+        aviso = 'El pull request se ha cerrado, pero MyRAYPA no ha confirmado la cancelación: el agente se actualizará en unos segundos.';
+      }
+      await this.#audit.record({ ...evento, ok: true, prCerrado, aviso });
+      this.#onChange();
+      return { ok: true, prCerrado, ...(aviso ? { aviso } : {}) };
     } catch (err) {
       await this.#audit.record({ ...evento, ok: false, error: err.message });
       return { ok: false, error: err.message };
